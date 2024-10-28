@@ -158,6 +158,8 @@ def raise_warning(desc, curr_sim_step=None):
 
 def convert_units(values, orig_units, new_units, step_length=1, keep_arr=False):
 
+    if orig_units == new_units: return values
+    
     if isinstance(values, (int, float)): values = [values]
     elif not isinstance(values, (list, tuple)):
         desc = "Invalid values '{0}' type (must be [int|float|list|tuple], not '{1}').".format(values, type(values).__name__)

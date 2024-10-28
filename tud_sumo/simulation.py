@@ -21,6 +21,7 @@ class Simulation:
         """
 
         self.curr_step = 0
+        self.curr_time = 0
         self.step_length = None
         self.units = Units(1)
         
@@ -1046,6 +1047,7 @@ class Simulation:
         """
 
         self.curr_step += 1
+        self.curr_time += self.step_length
 
         # First, implement the demand in the demand table (if exists)
         if self._manual_flow:

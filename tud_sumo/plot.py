@@ -11,77 +11,33 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from .simulation import Simulation
 from .utils import *
 
-default_labels = {"no_vehicles": "No. of Vehicles", "no_waiting": "No. of Waiting Vehicles", "tts": "Total Time Spent (s)", "delay": "Delay (s)", "throughput": "Throughput (veh/hr)",
-                  "vehicle_counts": "No. of Vehicles", "occupancies": "Occupancy (%)", "densities": "Density unit", "metres": "Distance (m)", "kilometres": "Distance (km)",
-                  "yards": "Distance (yd)", "feet": "Distance (ft)", "miles": "Distance (mi)", "m/s": "Speed (m/s)", "kmph": "Speed (kmph)", "mph": "Speed (mph)", "steps": "Time (Simulation Steps)",
-                  "seconds": "Time (s)", "minutes": "Time (m)", "hours": "Time (hr)"}
+class _GenericPlotter():
 
-default_titles = {"no_vehicles": "Number of Vehicles", "no_waiting": "Number of Waiting Vehicles", "tts": "Total Time Spent", "delay": "Delay",
-                  "vehicle_counts": "Number of Vehicles", "occupancies": "Vehicle Occupancies", "densities": "Vehicle Density",
-                  "speeds": "Average Speed", "limits": "Speed Limit", "throughput": "Throughput"}
+    def __init__(self, units: str="METRIC", time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True):
 
-# TU Delft colours as defined here: https://www.tudelft.nl/huisstijl/bouwstenen/kleur
-tud_colours = {"cyaan": "#00A6D6", "donkerblauw": "#0C2340", "turkoois": "#00B8C8", "blauw": "#0076C2", "paars": "#6F1D77", "roze": "#EF60A3",
-               "framboos": "#A50034", "rood": "#E03C31", "oranje": "#EC6842", "geel": "#FFB81C", "lichtgroen": "#6CC24A", "donkergroen": "#009B77"}
+        self._default_labels = {"no_vehicles": "No. of Vehicles", "no_waiting": "No. of Waiting Vehicles", "tts": "Total Time Spent (s)", "delay": "Delay (s)", "throughput": "Throughput (veh/hr)",
+                                "vehicle_counts": "No. of Vehicles", "occupancies": "Occupancy (%)", "densities": "Density unit", "metres": "Distance (m)", "kilometres": "Distance (km)",
+                                "yards": "Distance (yd)", "feet": "Distance (ft)", "miles": "Distance (mi)", "m/s": "Speed (m/s)", "kmph": "Speed (kmph)", "mph": "Speed (mph)", "steps": "Time (Simulation Steps)",
+                                "seconds": "Time (s)", "minutes": "Time (m)", "hours": "Time (hr)"}
 
-class Plotter:
-    """ Visualisation class that plots TUD-SUMO specific data. """
+        self._default_titles = {"no_vehicles": "Number of Vehicles", "no_waiting": "Number of Waiting Vehicles", "tts": "Total Time Spent", "delay": "Delay",
+                                "vehicle_counts": "Number of Vehicles", "occupancies": "Vehicle Occupancies", "densities": "Vehicle Density",
+                                "speeds": "Average Speed", "limits": "Speed Limit", "throughput": "Throughput"}
 
-    def __init__(self, simulation: Simulation|str, sim_label: str|None=None, time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
-        """
-        Args:
-            `simulation` (Simulation, str): Either simulation object, sim_data dict or sim_data filepath
-            `sim_label` (str, None): Simulation or scenario label added to the beginning of all plot titles (set to 'scenario' for scenario name)
-            `time_unit` (str): Plotting time unit used for all plots (must be ['_steps_'|'_seconds_'|'_minutes_'|'_hours_'])
-            `save_fig_loc` (str): Figure filepath when saving (defaults to current file)
-            `save_fig_dpi` (int): Figure dpi when saving (defaults to 600dpi)
-            `overwrite_figs` (bool): Denotes whether to allow overwriting of saved figures with the same name
-        """
+        # TU Delft colours as defined here: https://www.tudelft.nl/huisstijl/bouwstenen/kleur
+        self._tud_colours = {"cyaan": "#00A6D6", "donkerblauw": "#0C2340", "turkoois": "#00B8C8", "blauw": "#0076C2", "paars": "#6F1D77", "roze": "#EF60A3",
+                             "framboos": "#A50034", "rood": "#E03C31", "oranje": "#EC6842", "geel": "#FFB81C", "lichtgroen": "#6CC24A", "donkergroen": "#009B77"}
 
-        self.simulation = None
-        if isinstance(simulation, Simulation):
-            self.simulation = simulation
-            self.sim_data = simulation.__dict__()
-            self.units = simulation.units.name
-            scenario_name = simulation.scenario_name
-
-        elif isinstance(simulation, str):
-
-            if simulation.endswith(".json"): r_class, r_mode = json, "r"
-            elif simulation.endswith(".pkl"): r_class, r_mode = pkl, "rb"
-            else:
-                desc = "Invalid simulation file '{0}' (must be '.json' or '.pkl' file).".format(simulation)
-                raise_error(ValueError, desc)
-
-            if os.path.exists(simulation):
-                with open(simulation, r_mode) as fp:
-                    self.sim_data = r_class.load(fp)
-                    self.units = self.sim_data["units"]
-                    scenario_name = self.sim_data["scenario_name"]
-            else:
-                desc = "Simulation file '{0}' not found.".format(simulation)
-                raise_error(FileNotFoundError, desc)
-
-        elif isinstance(simulation, dict): self.sim_data, self.units, scenario_name = simulation, simulation["units"], simulation["scenario_name"]
-
-        else:
-            desc = "Invalid simulation type (must be Simulation|str|dict, not '{0}').".format(type(simulation).__name__)
-            raise_error(TypeError, desc)
-
-        if isinstance(sim_label, str) and sim_label.upper() == "SCENARIO": self.sim_label = scenario_name + ": "
-        elif sim_label != None: self.sim_label = sim_label + ": "
-        else: self.sim_label = ""
-        
-        avg_speed, speed, limit = "Avg. Speed ", "Vehicle Speed ", "Speed Limit "
-
-        error, desc = test_valid_string(self.units, ["METRIC", "IMPERIAL", "UK"], "simulation units")
+        units = units.upper()
+        error, desc = test_valid_string(units, ["METRIC", "IMPERIAL", "UK"], "simulation units")
         if error != None: raise_error(error, desc)
 
-        if self.units in ["IMPERIAL", "UK"]:
+        self.units, avg_speed, speed, limit = units, "Avg. Speed ", "Vehicle Speed ", "Speed Limit "
+        if units in ["IMPERIAL", "UK"]:
             avg_speed += "(mph)"
             speed += "(mph)"
             limit += "(mph)"
-        elif self.units in ["METRIC"]:
+        elif units in ["METRIC"]:
             avg_speed += "(km/h)"
             speed += "(km/h)"
             limit += "(km/h)"
@@ -90,10 +46,10 @@ class Plotter:
         if error != None: raise_error(error, desc)
         self.time_unit = time_unit.lower()
         
-        default_labels["sim_time"] = "Simulation Time ({0})".format(self.time_unit)
-        default_labels["speeds"] = avg_speed
-        default_labels["speed"] = speed
-        default_labels["limits"] = limit
+        self._default_labels["sim_time"] = "Simulation Time ({0})".format(self.time_unit)
+        self._default_labels["speeds"] = avg_speed
+        self._default_labels["speed"] = speed
+        self._default_labels["limits"] = limit
 
         self.save_fig_loc, self.overwrite_figs = save_fig_loc, overwrite_figs
         if self.save_fig_loc != "":
@@ -104,18 +60,18 @@ class Plotter:
             
         self.save_fig_dpi = save_fig_dpi
 
-        self.CYAAN = tud_colours["cyaan"]
-        self.DONKERBLAUW = tud_colours["donkerblauw"]
-        self.TURKOOIS = tud_colours["turkoois"]
-        self.BLAUW = tud_colours["blauw"]
-        self.PAARS = tud_colours["paars"]
-        self.ROZE = tud_colours["roze"]
-        self.FRAMBOOS = tud_colours["framboos"]
-        self.ROOD = tud_colours["rood"]
-        self.ORANJE = tud_colours["oranje"]
-        self.GEEL = tud_colours["geel"]
-        self.LICHTGROEN = tud_colours["lichtgroen"]
-        self.DONKERGROEN = tud_colours["donkergroen"]
+        self.CYAAN = self._tud_colours["cyaan"]
+        self.DONKERBLAUW = self._tud_colours["donkerblauw"]
+        self.TURKOOIS = self._tud_colours["turkoois"]
+        self.BLAUW = self._tud_colours["blauw"]
+        self.PAARS = self._tud_colours["paars"]
+        self.ROZE = self._tud_colours["roze"]
+        self.FRAMBOOS = self._tud_colours["framboos"]
+        self.ROOD = self._tud_colours["rood"]
+        self.ORANJE = self._tud_colours["oranje"]
+        self.GEEL = self._tud_colours["geel"]
+        self.LICHTGROEN = self._tud_colours["lichtgroen"]
+        self.DONKERGROEN = self._tud_colours["donkergroen"]
 
         self.line_colours = [self.CYAAN, self.ORANJE, self.LICHTGROEN, self.TURKOOIS, self.BLAUW, self.PAARS,
                              self.DONKERBLAUW, self.ROZE, self.FRAMBOOS, self.ROOD, self.GEEL, self.DONKERGROEN]
@@ -124,9 +80,6 @@ class Plotter:
         self._default_colour = self.line_colours[self._default_colour_idx]
         self._next_colour_idx = 0
 
-    def __str__(self): return "<{0}>".format(self.__name__)
-    def __name__(self): return "Plotter"
-    
     def _display_figure(self, filename: str|None=None) -> None:
         """
         Display figure, either saving to file or showing on screen.
@@ -149,6 +102,162 @@ class Plotter:
             plt.savefig(fp, dpi=self.save_fig_dpi)
 
         plt.close()
+
+    def _add_grid(self, ax, zorder=0):
+        ax.grid(True, 'both', color='grey', linestyle='dashed', linewidth=0.5, zorder=zorder)
+        
+    def _get_colour(self, colour: str|int|None=None, reset_wheel: bool=False) -> str:
+
+        if reset_wheel: self._next_colour_idx = 0
+
+        if colour == None:
+            colour = self.line_colours[0]
+        
+        elif isinstance(colour, int):
+            if self._next_colour_idx >= 0 and self._next_colour_idx < len(self.line_colours):
+                colour = self.line_colours[colour]
+            else:
+                desc = "Colour wheel index '{0}' out of range.".format(self._next_colour_idx)
+                raise_error(IndexError, desc)
+
+        elif isinstance(colour, str):
+            if colour in self._tud_colours:
+                colour = self._tud_colours[colour]
+            elif colour.upper() == "DEFAULT":
+                colour = self._tud_colours[self._default_colour]
+            elif colour.upper() == "RANDOM":
+                colour = choice(self.line_colours)
+            elif colour.upper() == "WHEEL":
+                if self._next_colour_idx >= 0 and self._next_colour_idx < len(self.line_colours):
+                    colour = self.line_colours[self._next_colour_idx]
+                
+                    if self._next_colour_idx == len(self.line_colours) - 1: self._next_colour_idx = 0
+                    else: self._next_colour_idx += 1
+            
+                else:
+                    desc = "Colour wheel index '{0}' out of range.".format(self._next_colour_idx)
+                    raise_error(IndexError, desc)
+            elif not is_mpl_colour(colour):
+                desc = "Unrecognised colour '{0}'.".format(colour)
+                raise_error(ValueError, desc)
+
+        else:
+            desc = "Invalid plt_colour '{0}' (must be 'str', not '{1}').".format(colour, type(colour).__name__)
+            raise_error(TypeError, desc)
+        
+        return colour
+
+    def _plot_event(self, ax, event_ids: str|list|None=None) -> None:
+        """
+        Plot events from the simulation data on a given axes.
+        
+        Args:
+            `ax` (matplotlib.axes): matplotlib axes
+            `event_ids` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+        """
+
+        if event_ids != None:
+            if "events" in self.sim_data["data"].keys():
+                
+                statuses, all_statuses = {}, ["scheduled", "active", "completed"]
+
+                if isinstance(event_ids, str) and event_ids not in all_statuses + ["all"]: event_ids = [event_ids]
+
+                if isinstance(event_ids, str):
+                    if event_ids == "all":
+                        event_ids = []
+                        for status in all_statuses:
+                            if status in self.sim_data["data"]["events"]:
+                                s_events = list(self.sim_data["data"]["events"][status].keys())
+                                event_ids += s_events
+                                statuses.update({e_id: status for e_id in s_events})
+
+                    elif event_ids in all_statuses:
+                        if event_ids in self.sim_data["data"]["events"]:
+                            statuses = {e_id: event_ids for e_id in self.sim_data["data"]["events"][event_ids].keys()}
+                            event_ids = list(statuses.keys())
+                        else: event_ids = []
+                        
+                else:
+                    if not isinstance(event_ids, (list, tuple)): event_ids = [event_ids]
+                    validate_list_types(event_ids, str, param_name="event_ids")
+                    for e_id in event_ids:
+                        
+                        for status in all_statuses:
+                            if status in self.sim_data["data"]["events"]:
+                                if e_id in self.sim_data["data"]["events"][status]:
+                                    statuses[e_id] = status
+                        
+                        if e_id not in statuses:
+                            desc = "Event with ID '{0}' not found.".format(e_id)
+                            raise_error(KeyError, desc)
+
+                if len(event_ids) > 0:
+
+                    _, y_lim = ax.get_xlim(), ax.get_ylim()
+                    for event_id in event_ids:
+
+                        event = self.sim_data["data"]["events"][statuses[event_id]][event_id]
+                        event_start, event_end = convert_units([event["start_time"], event["end_time"]], "steps", self.time_unit, self.sim_data["step_len"])
+                        ax.axvspan(event_start, event_end, color="red", zorder=1, alpha=0.2)
+
+                        ax.axvline(event_start, color="red", alpha=0.4, linestyle='--')
+                        ax.axvline(event_end, color="red", alpha=0.4, linestyle='--')
+
+                        ax.text(event_start + ((event_end - event_start)/2), y_lim[1] * 0.9, event_id, horizontalalignment='center', color="red", zorder=10)
+
+class Plotter(_GenericPlotter):
+    """ Visualisation class that plots TUD-SUMO specific data for one simulation. """
+
+    def __init__(self, simulation: Simulation|str, sim_label: str|None=None, time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
+        """
+        Args:
+            `simulation` (Simulation, str): Either simulation object, sim_data dict or sim_data filepath
+            `sim_label` (str, None): Simulation or scenario label added to the beginning of all plot titles (set to 'scenario' for scenario name)
+            `time_unit` (str): Plotting time unit used for all plots (must be ['_steps_'|'_seconds_'|'_minutes_'|'_hours_'])
+            `save_fig_loc` (str): Figure filepath when saving (defaults to current file)
+            `save_fig_dpi` (int): Figure dpi when saving (defaults to 600dpi)
+            `overwrite_figs` (bool): Denotes whether to allow overwriting of saved figures with the same name
+        """
+
+        self.simulation = None
+        if isinstance(simulation, Simulation):
+            self.simulation = simulation
+            self.sim_data = simulation.__dict__()
+            units = simulation.units.name
+            scenario_name = simulation.scenario_name
+
+        elif isinstance(simulation, str):
+
+            if simulation.endswith(".json"): r_class, r_mode = json, "r"
+            elif simulation.endswith(".pkl"): r_class, r_mode = pkl, "rb"
+            else:
+                desc = "Invalid simulation file '{0}' (must be '.json' or '.pkl' file).".format(simulation)
+                raise_error(ValueError, desc)
+
+            if os.path.exists(simulation):
+                with open(simulation, r_mode) as fp:
+                    self.sim_data = r_class.load(fp)
+                    units = self.sim_data["units"]
+                    scenario_name = self.sim_data["scenario_name"]
+            else:
+                desc = "Simulation file '{0}' not found.".format(simulation)
+                raise_error(FileNotFoundError, desc)
+
+        elif isinstance(simulation, dict): self.sim_data, units, scenario_name = simulation, simulation["units"], simulation["scenario_name"]
+
+        else:
+            desc = "Invalid simulation type (must be Simulation|str|dict, not '{0}').".format(type(simulation).__name__)
+            raise_error(TypeError, desc)
+
+        if isinstance(sim_label, str) and sim_label.upper() == "SCENARIO": self.sim_label = scenario_name + ": "
+        elif sim_label != None: self.sim_label = sim_label + ": "
+        else: self.sim_label = ""
+
+        super().__init__(units, time_unit, save_fig_loc, save_fig_dpi, overwrite_figs)
+
+    def __str__(self): return "<{0}>".format(self.__name__)
+    def __name__(self): return "Plotter"
         
     def plot_junc_flows(self, junc_id: str, vehicle_types: list|tuple|None=None, plot_all: bool=True, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
         """
@@ -216,10 +325,10 @@ class Plotter:
 
         fig_title = self.sim_label+"Vehicle Flows at Intersection '{0}'".format(junc_id) if fig_title == None else fig_title
         ax.set_title(fig_title, pad=20)
-        ax.set_ylabel(default_labels["vehicle_counts"])
+        ax.set_ylabel(self._default_labels["vehicle_counts"])
         ax.set_xlim([time_steps[0], time_steps[-1] + convert_units(step, "seconds", self.time_unit, step)])
         ax.set_ylim(bottom=0)
-        ax.set_xlabel(default_labels["sim_time"])
+        ax.set_xlabel(self._default_labels["sim_time"])
         fig.tight_layout()
         ax.legend(title="Vehicle Types", fontsize="small", shadow=True)
         self._add_grid(ax, None)
@@ -336,7 +445,7 @@ class Plotter:
             ax.set_ylabel("Colour Duration (%)")
             ax.set_ylim((0, 100))
         else:
-            ax.set_xlabel(default_labels["sim_time"])
+            ax.set_xlabel(self._default_labels["sim_time"])
             ax.set_ylabel("Movement")
             ax.set_xlim(xlim)
 
@@ -473,7 +582,7 @@ class Plotter:
         ax.axhline(min_r, color=self.ROOD, linestyle="--", zorder=2)
         self._add_grid(ax, None)
         if yax_labels: ax.set_ylabel("Metering Rate (veh/hr)")
-        if xax_labels: ax.set_xlabel(default_labels["sim_time"])
+        if xax_labels: ax.set_xlabel(self._default_labels["sim_time"])
         fig_title = "{0}'{1}' Metering Rate".format(self.sim_label, rm_id) if not isinstance(fig_title, str) else fig_title
         if fig_title != "": ax.set_title(fig_title, pad=20)
 
@@ -594,10 +703,10 @@ class Plotter:
                 ax.set_xlim(xlim)
                 ax.set_ylim([0, get_axis_lim(avg_data)])
                 self._add_grid(ax, None)
-                if rm_idx == 0: ax.set_ylabel(default_labels[data_key])
-                ax.set_xlabel(default_labels["sim_time"])
+                if rm_idx == 0: ax.set_ylabel(self._default_labels[data_key])
+                ax.set_xlabel(self._default_labels["sim_time"])
                 
-                if len(rm_ids) == 1: ax.set_title(default_titles[data_key], pad=20)
+                if len(rm_ids) == 1: ax.set_title(self._default_titles[data_key], pad=20)
 
                 self._plot_event(ax, show_events)
 
@@ -671,7 +780,7 @@ class Plotter:
         all_data_time_vals = convert_units([x for x in range(start, end)], "steps", self.time_unit, step)
         data_time_vals, queue_lengths = limit_vals_by_range(all_data_time_vals, queue_lengths, time_range)
         ax1.plot(data_time_vals, queue_lengths, linewidth=1, zorder=3, color=colour)
-        if xax_labels: ax1.set_xlabel(default_labels["sim_time"])
+        if xax_labels: ax1.set_xlabel(self._default_labels["sim_time"])
         if (isinstance(yax_labels, bool) and yax_labels) or (isinstance(yax_labels, (list, tuple)) and len(yax_labels) == 2 and yax_labels[0]):
             ax1.set_ylabel("No. of On-ramp Vehicles")
         else:
@@ -810,13 +919,13 @@ class Plotter:
         ax.plot(x_vals, y_vals, color=self._get_colour(plt_colour))
 
         if fig_title == None:
-            fig_title = "Network-wide "+default_titles[data_key]
+            fig_title = "Network-wide "+self._default_titles[data_key]
             if plot_cumulative: fig_title = "Cumulative "+fig_title
             fig_title = self.sim_label + fig_title
         ax.set_title(fig_title, pad=20)
 
-        ax.set_xlabel(default_labels["sim_time"])
-        ax.set_ylabel(default_labels[data_key])
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels[data_key])
         ax.set_xlim([x_vals[0], x_vals[-1]])
         ax.set_ylim([0, get_axis_lim(y_vals)])
         self._add_grid(ax, None)
@@ -854,7 +963,7 @@ class Plotter:
             desc = "Unrecognised data key '{0}' (must be [speeds|vehicle_counts|occupancies]).".format(data_key)
             raise_error(KeyError, desc)
         elif detector_id not in self.sim_data["data"]["detectors"].keys():
-            desc = "Plotter.plot_detector_data(): Detector ID '{0}' not found.".format(detector_id)
+            desc = "Detector ID '{0}' not found.".format(detector_id)
             raise_error(KeyError, desc)
         elif data_key == "occupancies" and self.sim_data["data"]["detectors"][detector_id]["type"] == "multientryexit":
             desc = "Multi-Entry-Exit Detectors ('{0}') do not measure '{1}'.".format(detector_id, data_key)
@@ -872,13 +981,13 @@ class Plotter:
         ax.plot(x_vals, y_vals, color=self._get_colour(plt_colour))
 
         if fig_title == None:
-            fig_title = "{0} (Detector '{1}')".format(default_titles[data_key], detector_id)
+            fig_title = "{0} (Detector '{1}')".format(self._default_titles[data_key], detector_id)
             if plot_cumulative: fig_title = "Cumulative "+fig_title
             fig_title = self.sim_label + fig_title
         ax.set_title(fig_title, pad=20)
 
-        ax.set_xlabel(default_labels["sim_time"])
-        ax.set_ylabel(default_labels[data_key])
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels[data_key])
         ax.set_xlim([x_vals[0], x_vals[-1]])
         if data_key == "occupancies": ax.set_ylim([0, 100])
         else: ax.set_ylim([0, get_axis_lim(y_vals)])
@@ -962,7 +1071,7 @@ class Plotter:
 
         ax.plot(time_steps, demand_vals, color=self._get_colour(plt_colour))
         ax.set_ylabel("Demand (vehicles/hour)")
-        ax.set_xlabel(default_labels["sim_time"])
+        ax.set_xlabel(self._default_labels["sim_time"])
         ax.set_xlim([convert_units(start, "steps", self.time_unit, step), convert_units(end, "steps", self.time_unit, step)])
         ax.set_ylim([0, get_axis_lim(demand_vals)])
         self._add_grid(ax, None)
@@ -1203,7 +1312,7 @@ class Plotter:
         ax.set_xlim([x_vals[0], x_vals[-1]])
         ax.set_ylim([0, get_axis_lim(inflows)])
         self._add_grid(ax, None)
-        ax.set_xlabel(default_labels["sim_time"])
+        ax.set_xlabel(self._default_labels["sim_time"])
         ax.set_ylabel("Cumulative No. of Vehicles")
         ax.legend(loc='lower right', shadow=True)
 
@@ -1331,8 +1440,8 @@ class Plotter:
         if time_range != None: xlim = [max(xlim[0], time_range[0]), min(xlim[1], time_range[1])]
         ax.set_xlim(xlim)
 
-        ax.set_xlabel(default_labels["sim_time"])
-        ax.set_ylabel(default_labels["limits"])
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels["limits"])
 
         fig_title = "{0}'{1}' Speed Limit and Average Vehicle Speed".format(self.sim_label, vsl_id) if not isinstance(fig_title, str) else fig_title
         ax.set_title(fig_title, pad=20)
@@ -1391,7 +1500,7 @@ class Plotter:
         ax.set_xlim([x_vals[0], x_vals[-1]])
         y_lim = get_axis_lim(y_vals)
         ax.set_ylim([0, y_lim])
-        ax.set_xlabel(default_labels["sim_time"])
+        ax.set_xlabel(self._default_labels["sim_time"])
         ax.set_ylabel("No. of Diverted Vehicles")
         self._add_grid(ax, None)
 
@@ -1463,7 +1572,7 @@ class Plotter:
         elif self.units in ["METRIC", "UK"]:
             orig_units, new_units = "kilometres", "kilometres" if total_len > 1 else "metres"
 
-        x_label, y_label = default_labels["sim_time"], default_labels[new_units]
+        x_label, y_label = self._default_labels["sim_time"], self._default_labels[new_units]
 
         if time_range == None: time_range = [-math.inf, math.inf]
 
@@ -1519,7 +1628,7 @@ class Plotter:
 
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.1)
-        plt.colorbar(points, cax=cax, label=default_labels["speed"])
+        plt.colorbar(points, cax=cax, label=self._default_labels["speed"])
 
         ax.set_xlim(min(x_vals), max(x_vals))
         ax.set_ylim(0, max(y_vals))
@@ -1679,7 +1788,7 @@ class Plotter:
             ax.scatter(entry_x, entry_y, color='lightgrey', marker='+', s=30, zorder=2)
             ax.scatter(exit_x, exit_y, color='lightgrey', marker='x', s=20, zorder=2)
 
-        x_label, y_label = default_labels["sim_time"], default_labels[new_units]
+        x_label, y_label = self._default_labels["sim_time"], self._default_labels[new_units]
 
         ax.set_xlim(x_lim)
         ax.set_ylim(y_lim)
@@ -1911,7 +2020,7 @@ class Plotter:
 
         ax.set_title(fig_title, pad=20)
         ax.set_ylabel("Throughput (veh/hr)")
-        ax.set_xlabel(default_labels["sim_time"])
+        ax.set_xlabel(self._default_labels["sim_time"])
         ax.set_xlim(convert_units([start, end], "steps", self.time_unit, self.sim_data["step_len"]))
         ax.set_ylim([0, get_axis_lim(y_vals)])
 
@@ -1979,7 +2088,7 @@ class Plotter:
 
         ax.set_title(fig_title, pad=20)
         ax.set_ylabel("Frequency")
-        ax.set_xlabel(default_labels[self.time_unit])
+        ax.set_xlabel(self._default_labels[self.time_unit])
         ax.set_ylim(0, get_axis_lim(ax.get_ylim()[1]))
 
         fig.tight_layout()
@@ -1987,105 +2096,254 @@ class Plotter:
         self._add_grid(ax)
         self._display_figure(save_fig)
 
-    def _add_grid(self, ax, zorder=0):
-        ax.grid(True, 'both', color='grey', linestyle='dashed', linewidth=0.5, zorder=zorder)
-        
-    def _get_colour(self, colour: str|int|None=None, reset_wheel: bool=False) -> str:
+class MultiPlotter(_GenericPlotter):
+    """ Visualisation class that plots TUD-SUMO specific data for multiple simulations. """
 
-        if reset_wheel: self._next_colour_idx = 0
+    def __init__(self, scenario_label: str|None=None, units: str="metric", time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
+        """
+        Args:
+            `scenario_label` (str, None): Scenario label added to the beginning of all plot titles
+            `units` (str): Simulation data units, must match all added simulations (must be ['_metric_'|'_imperial_'|'_uk_'])
+            `time_unit` (str): Plotting time unit used for all plots (must be ['_steps_'|'_seconds_'|'_minutes_'|'_hours_'])
+            `save_fig_loc` (str): Figure filepath when saving (defaults to current file)
+            `save_fig_dpi` (int): Figure dpi when saving (defaults to 600dpi)
+            `overwrite_figs` (bool): Denotes whether to allow overwriting of saved figures with the same name
+        """
 
-        if colour == None:
-            colour = self.line_colours[0]
-        
-        elif isinstance(colour, int):
-            if self._next_colour_idx >= 0 and self._next_colour_idx < len(self.line_colours):
-                colour = self.line_colours[colour]
-            else:
-                desc = "Colour wheel index '{0}' out of range.".format(self._next_colour_idx)
-                raise_error(IndexError, desc)
-
-        elif isinstance(colour, str):
-            if colour in tud_colours:
-                colour = tud_colours[colour]
-            elif colour.upper() == "DEFAULT":
-                colour = tud_colours[self._default_colour]
-            elif colour.upper() == "RANDOM":
-                colour = choice(self.line_colours)
-            elif colour.upper() == "WHEEL":
-                if self._next_colour_idx >= 0 and self._next_colour_idx < len(self.line_colours):
-                    colour = self.line_colours[self._next_colour_idx]
+        self.sim_datasets = {}
+        self.sim_groups = {}
+        self.sim_group_ids = set()
+        self.sim_labels = {}
                 
-                    if self._next_colour_idx == len(self.line_colours) - 1: self._next_colour_idx = 0
-                    else: self._next_colour_idx += 1
-            
-                else:
-                    desc = "Colour wheel index '{0}' out of range.".format(self._next_colour_idx)
-                    raise_error(IndexError, desc)
-            elif not is_mpl_colour(colour):
-                desc = "Unrecognised colour '{0}'.".format(colour)
+        if scenario_label != None: self.scenario_label = scenario_label + ": "
+        else: self.scenario_label = ""
+        
+        super().__init__(units, time_unit, save_fig_loc, save_fig_dpi, overwrite_figs)
+
+    def __str__(self): return "<{0}>".format(self.__name__)
+    def __name__(self): return "MultiPlotter"
+
+    def add_simulations(self, simulations: list|tuple, labels: list|tuple|None=None, groups: str|list|tuple|None=None) -> None:
+        """
+        Add simulation dataset(s) to the plotter. `simulations` and `labels` must have the same length, with each
+        label corresponding to a simulation. By default, all simulations will use their scenario name as a labels,
+        or set a label in the list to `None` to use the scenario name.
+        
+        `Groups` can either be a single group ID, meaning all simulations belong to the same group, or a list of
+        group IDs corresponding to each simulation. By default, all simulations are not assigned a group, or set
+        a group ID in the list to `None` to only assign specific simulations a group.
+
+        Args:
+            `simulations` (list, tuple): List of sim_data filepaths
+            `labels` (list, tuple, None): List of simulation dataset labels
+            `groups` (str, list, tuple, None): List of group IDs or single ID
+        """
+
+        validate_list_types(simulations, str, param_name="sim_data filenames")
+
+        if labels != None: validate_list_types(labels, tuple([(str,None)]*len(simulations)), True, "sim_data labels")
+        else: labels = [None]*len(simulations)
+
+        if groups != None:
+            if isinstance(groups, str): groups = [groups]*len(simulations)
+            else: validate_list_types(groups, tuple([(str,None)]*len(simulations)), True, "sim_data groups")
+        else: groups = [None]*len(simulations)
+
+        for simulation, sim_label, sim_group in zip(simulations, labels, groups):
+
+            sim_id = len(self.sim_datasets) + 1
+            if simulation.endswith(".json"): r_class, r_mode = json, "r"
+            elif simulation.endswith(".pkl"): r_class, r_mode = pkl, "rb"
+            else:
+                desc = "Invalid simulation file '{0}' (must be '.json' or '.pkl' file).".format(simulation)
                 raise_error(ValueError, desc)
 
-        else:
-            desc = "Invalid plt_colour '{0}' (must be 'str', not '{1}').".format(colour, type(colour).__name__)
-            raise_error(TypeError, desc)
-        
-        return colour
+            if os.path.exists(simulation):
+                with open(simulation, r_mode) as fp:
+                    sim_data = r_class.load(fp)
+                    sim_units = sim_data["units"]
 
-    def _plot_event(self, ax, event_ids: str|list|None=None) -> None:
+                    if sim_units != self.units:
+                        desc = "Invalid Simulation '{0}', units mismatch (must be MultiPlotter unit '{1}', not '{2}').".format(sim_label, sim_units, self.units)
+                        raise_error(ValueError, desc)
+
+                    self.sim_datasets[sim_id] = sim_data
+
+                    if sim_group != None:
+                        self.sim_groups[sim_id] = sim_group
+                        self.sim_group_ids.add(sim_group)
+
+                    if sim_label != None: self.sim_labels[sim_id] = sim_label
+                    else: self.sim_labels[sim_id] = sim_data["scenario_name"]
+
+            else:
+                desc = "Simulation file '{0}' not found.".format(simulation)
+                raise_error(FileNotFoundError, desc)
+
+    def plot_vehicle_data(self, data_key: str, plot_cumulative: bool=False, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
         """
-        Plot events from the simulation data on a given axes.
+        Plot network-wide vehicle data for each simulation.
         
         Args:
-            `ax` (matplotlib.axes): matplotlib axes
-            `event_ids` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+            `data_key` (str): Data key to plot, either '_no_vehicles_', '_no_waiting_', '_tts_' or '_delay_'
+            `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
+            `aggregation_steps` (int, None): If given, values are aggregated using this interval
+            `time_range` (list, tuple, None): Plotting time range (in plotter class units)
+            `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+            `fig_title` (str, None): If given, will overwrite default title
+            `save_fig` (str, None): Output image filename, will show image if not given
         """
 
-        if event_ids != None:
-            if "events" in self.sim_data["data"].keys():
+        if data_key not in ["no_vehicles", "no_waiting", "tts", "delay"]:
+            desc = "Unrecognised data key '{0}' (must be ['no_vehicles'|'no_waiting'|'tts'|'delay']).".format(data_key)
+            raise_error(KeyError, desc)
+
+        fig, ax = plt.subplots(1, 1)
+
+        all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
+        x_lim, max_y_val = [math.inf, -math.inf], -math.inf
+        for sim_id, sim_data in self.sim_datasets.items():
+
+            start, step = sim_data["start"], sim_data["step_len"]
+            y_vals = sim_data["data"]["vehicles"][data_key]
+            if plot_cumulative: y_vals = get_cumulative_arr(y_vals)
+            x_vals = get_time_steps(y_vals, self.time_unit, step, start)
+            x_vals, y_vals = limit_vals_by_range(x_vals, y_vals, time_range)
+
+            x_lim = [min(min(x_vals), x_lim[0]), max(max(x_vals), x_lim[1])]
+
+            if aggregation_steps != None:
+                y_vals, x_vals = get_aggregated_data(y_vals, x_vals, aggregation_steps)
+
+            max_y_val = max(max(y_vals), max_y_val)
+            if sim_id not in self.sim_groups:
+                ax.plot(x_vals, y_vals, label=self.sim_labels[sim_id], color=self._get_colour("WHEEL", plotted==0))
+                plotted += 1
+            else:
+                all_group_data[self.sim_groups[sim_id]].append((x_vals, y_vals))
+
+        for group_id, group_data in all_group_data.items():
+            if len(group_data) > 0:
+                min_y, max_y, avg_y = [], [], []
+                x_vals = group_data[0][0]
                 
-                statuses, all_statuses = {}, ["scheduled", "active", "completed"]
+                n_vals = len(x_vals)
+                for idx in range(n_vals):
+                    y_vals = [all_vals[1][idx] for all_vals in group_data]
 
-                if isinstance(event_ids, str) and event_ids not in all_statuses + ["all"]: event_ids = [event_ids]
+                    min_y.append(min(y_vals))
+                    max_y.append(max(y_vals))
+                    avg_y.append(sum(y_vals) / len(y_vals))
 
-                if isinstance(event_ids, str):
-                    if event_ids == "all":
-                        event_ids = []
-                        for status in all_statuses:
-                            if status in self.sim_data["data"]["events"]:
-                                s_events = list(self.sim_data["data"]["events"][status].keys())
-                                event_ids += s_events
-                                statuses.update({e_id: status for e_id in s_events})
+                colour = self._get_colour("WHEEL", plotted==0)
+                ax.plot(x_vals, avg_y, label=group_id, color=colour)
+                ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
+                plotted += 1
 
-                    elif event_ids in all_statuses:
-                        if event_ids in self.sim_data["data"]["events"]:
-                            statuses = {e_id: event_ids for e_id in self.sim_data["data"]["events"][event_ids].keys()}
-                            event_ids = list(statuses.keys())
-                        else: event_ids = []
-                        
-                else:
-                    if not isinstance(event_ids, (list, tuple)): event_ids = [event_ids]
-                    validate_list_types(event_ids, str, param_name="event_ids")
-                    for e_id in event_ids:
-                        
-                        for status in all_statuses:
-                            if status in self.sim_data["data"]["events"]:
-                                if e_id in self.sim_data["data"]["events"][status]:
-                                    statuses[e_id] = status
-                        
-                        if e_id not in statuses:
-                            desc = "Event with ID '{0}' not found.".format(e_id)
-                            raise_error(KeyError, desc)
+        if fig_title == None:
+            fig_title = "Network-wide "+self._default_titles[data_key]
+            if plot_cumulative: fig_title = "Cumulative "+fig_title
+            fig_title = self.scenario_label + fig_title
+        ax.set_title(fig_title, pad=20)
 
-                if len(event_ids) > 0:
+        if plotted > 1: ax.legend(shadow=True)
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels[data_key])
+        ax.set_xlim(x_lim)
+        ax.set_ylim([0, get_axis_lim(max_y_val)])
+        self._add_grid(ax, None)
 
-                    _, y_lim = ax.get_xlim(), ax.get_ylim()
-                    for event_id in event_ids:
+        self._plot_event(ax, show_events)
+        
+        fig.tight_layout()
 
-                        event = self.sim_data["data"]["events"][statuses[event_id]][event_id]
-                        event_start, event_end = convert_units([event["start_time"], event["end_time"]], "steps", self.time_unit, self.sim_data["step_len"])
-                        ax.axvspan(event_start, event_end, color="red", zorder=1, alpha=0.2)
+        self._display_figure(save_fig)
 
-                        ax.axvline(event_start, color="red", alpha=0.4, linestyle='--')
-                        ax.axvline(event_end, color="red", alpha=0.4, linestyle='--')
+    def plot_detector_data(self, detector_id: str, data_key: str, plot_cumulative: bool=False, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
+        """
+        Plot detector data from each simulation.
+        
+        Args:
+            `detector_id` (str): Detector ID
+            `data_key` (str): Data key to plot, either '_speeds_', '_vehicle_counts_' or '_occupancies_'
+            `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
+            `aggregation_steps` (int, None): If given, values are aggregated using this interval
+            `time_range` (list, tuple, None): Plotting time range (in plotter class units)
+            `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+            `fig_title` (str, None): If given, will overwrite default title
+            `save_fig` (str, None): Output image filename, will show image if not given
+        """
+  
+        if data_key not in ["speeds", "vehicle_counts", "occupancies"]:
+            desc = "Unrecognised data key '{0}' (must be [speeds|vehicle_counts|occupancies]).".format(data_key)
+            raise_error(KeyError, desc)
+        
+        fig, ax = plt.subplots(1, 1)
 
-                        ax.text(event_start + ((event_end - event_start)/2), y_lim[1] * 0.9, event_id, horizontalalignment='center', color="red", zorder=10)
+        all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
+        x_lim, max_y_val = [math.inf, -math.inf], -math.inf
+        for sim_id, sim_data in self.sim_datasets.items():
+
+            if detector_id not in sim_data["data"]["detectors"].keys():
+                desc = "Detector ID '{0}' not found in Simulation '{1}'.".format(detector_id, self.sim_labels[sim_id])
+                raise_error(KeyError, desc)
+            elif data_key == "occupancies" and sim_data["data"]["detectors"][detector_id]["type"] == "multientryexit":
+                desc = "Multi-Entry-Exit Detectors ('{0}') do not measure '{1}'.".format(detector_id, data_key)
+                raise_error(ValueError, desc)
+
+            start, step = sim_data["start"], sim_data["step_len"]
+            y_vals = sim_data["data"]["detectors"][detector_id][data_key]
+            if data_key == "occupancies": y_vals = [val * 100 for val in y_vals]
+            if plot_cumulative: y_vals = get_cumulative_arr(y_vals)
+            x_vals = get_time_steps(y_vals, self.time_unit, step, start)
+            x_vals, y_vals = limit_vals_by_range(x_vals, y_vals, time_range)
+
+            x_lim = [min(min(x_vals), x_lim[0]), max(max(x_vals), x_lim[1])]
+            
+            if aggregation_steps != None:
+                y_vals, x_vals = get_aggregated_data(y_vals, x_vals, aggregation_steps)
+
+            max_y_val = max(max(y_vals), max_y_val)
+            if sim_id not in self.sim_groups:
+                ax.plot(x_vals, y_vals, label=self.sim_labels[sim_id], color=self._get_colour("WHEEL", plotted==0))
+                plotted += 1
+            else:
+                all_group_data[self.sim_groups[sim_id]].append((x_vals, y_vals))
+
+        for group_id, group_data in all_group_data.items():
+            if len(group_data) > 0:
+                min_y, max_y, avg_y = [], [], []
+                x_vals = group_data[0][0]
+                
+                n_vals = len(x_vals)
+                for idx in range(n_vals):
+                    y_vals = [all_vals[1][idx] for all_vals in group_data]
+
+                    min_y.append(min(y_vals))
+                    max_y.append(max(y_vals))
+                    avg_y.append(sum(y_vals) / len(y_vals))
+
+                colour = self._get_colour("WHEEL", plotted==0)
+                ax.plot(x_vals, avg_y, label=group_id, color=colour)
+                ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
+                plotted += 1
+
+        if fig_title == None:
+            fig_title = "{0} (Detector '{1}')".format(self._default_titles[data_key], detector_id)
+            if plot_cumulative: fig_title = "Cumulative "+fig_title
+            fig_title = self.scenario_label + fig_title
+        ax.set_title(fig_title, pad=20)
+
+        if plotted > 1: ax.legend(shadow=True)
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels[data_key])
+        ax.set_xlim(x_lim)
+        if data_key == "occupancies": ax.set_ylim([0, 100])
+        else: ax.set_ylim([0, get_axis_lim(max_y_val)])
+        self._add_grid(ax, None)
+
+        self._plot_event(ax, show_events)
+        
+        fig.tight_layout()
+
+        self._display_figure(save_fig)
