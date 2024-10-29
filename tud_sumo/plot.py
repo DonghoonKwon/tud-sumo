@@ -1,6 +1,7 @@
 import json, math, os.path, numpy as np, pickle as pkl
 from copy import deepcopy
 from random import random, seed, choice
+from tqdm import tqdm
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -2033,49 +2034,9 @@ class Plotter(_GenericPlotter):
             self.sim_data = self.simulation.__dict__()
             self.units = self.simulation.units.name
 
-        if time_range == None: time_range = [-math.inf, math.inf]
-        else: time_range = convert_units(time_range, self.time_unit, "steps", self.sim_data["step_len"])
-
-        com_trip_data = self.sim_data["data"]["trips"]["completed"]
-
-        completion_times = []
-        for trip in com_trip_data.values():
-            
-            if "arrival" not in trip: continue
-            origin, destination, arrival, veh_type = trip["origin"], trip["destination"], trip["arrival"], trip["vehicle_type"]
-
-            if vehicle_types != None and veh_type not in vehicle_types: continue
-            elif od_pair != None and origin != od_pair[0]: continue
-            elif od_pair != None and destination != od_pair[1]: continue
-            elif arrival <= time_range[0] or arrival >= time_range[1]: continue
-            else:
-                completion_times.append(trip["arrival"])
-
-        if len(completion_times) == 0:
-            desc = "No trip data to plot."
-            raise_error(ValueError, desc)
-
-        start = int(max(time_range[0], self.sim_data["start"]))
-        end = int(min(time_range[1], self.sim_data["end"]))
-
-        x_vals = list(range(start, end + 1))
-        y_vals = [0] * (len(x_vals))
-        for val in completion_times:
-            if val - start < len(y_vals):
-                y_vals[val - start] += 1
-
-        q1 = np.quantile(x_vals, 0.25)
-        q3 = np.quantile(x_vals, 0.75)
-        aggregation_steps = math.ceil((2 * (q3 - q1)) / (len(x_vals) ** (1 / 3)))
-        y_vals, x_vals = get_aggregated_data(y_vals, x_vals, aggregation_steps, False)
-    
-        x_vals, y_vals = [start]+x_vals, [0]+y_vals
-        agg_time = convert_units(aggregation_steps, "steps", "hours", self.sim_data["step_len"])
-        y_vals = [val / agg_time for val in y_vals]
-
         fig, ax = plt.subplots(1, 1)
-
-        ax.plot(convert_units(x_vals, "steps", self.time_unit, self.sim_data["step_len"]), y_vals, color=self._get_colour(plt_colour), linewidth=1)
+        x_vals, y_vals = _get_throughput_x_y(self.sim_data, self.time_unit, od_pair, vehicle_types, time_range)
+        ax.plot(x_vals, y_vals, color=self._get_colour(plt_colour), linewidth=1)
         
         if fig_title == None:
             if od_pair == None: fig_title = "{0}Network Throughput".format(self.sim_label)
@@ -2084,15 +2045,13 @@ class Plotter(_GenericPlotter):
         ax.set_title(fig_title, pad=20)
         ax.set_ylabel("Throughput (veh/hr)")
         ax.set_xlabel(self._default_labels["sim_time"])
-        ax.set_xlim(convert_units([start, end], "steps", self.time_unit, self.sim_data["step_len"]))
+        ax.set_xlim([x_vals[0], x_vals[-1]])
         ax.set_ylim([0, get_axis_lim(y_vals)])
 
         fig.tight_layout()
 
         self._add_grid(ax)
-
         self._plot_event(ax, show_events)
-
         self._display_figure(save_fig)
 
     def plot_trip_time_histogram(self, od_pair: list|tuple|None=None, n_bins: int|None=None, cumulative_hist: bool=False, vehicle_types: list|tuple|None=None, time_range: list|tuple|None=None, plt_colour: str|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
@@ -2162,12 +2121,13 @@ class Plotter(_GenericPlotter):
 class MultiPlotter(_GenericPlotter):
     """ Visualisation class that plots TUD-SUMO data for multiple simulations. """
 
-    def __init__(self, scenario_label: str|None=None, units: str="metric", time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
+    def __init__(self, scenario_label: str|None=None, units: str="metric", time_unit: str="seconds", sim_data_loc: str="", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
         """
         Args:
             `scenario_label` (str, None): Scenario label added to the beginning of all plot titles
             `units` (str): Simulation data units, must match all added simulations (must be ['_metric_'|'_imperial_'|'_uk_'])
             `time_unit` (str): Plotting time unit used for all plots (must be ['_steps_'|'_seconds_'|'_minutes_'|'_hours_'])
+            `sim_data_loc` (str): Location of simulation data files (for all simulations)
             `save_fig_loc` (str): Figure filepath when saving (defaults to current file)
             `save_fig_dpi` (int): Figure dpi when saving (defaults to 600dpi)
             `overwrite_figs` (bool): Denotes whether to allow overwriting of saved figures with the same name
@@ -2180,13 +2140,15 @@ class MultiPlotter(_GenericPlotter):
                 
         if scenario_label != None: self.scenario_label = scenario_label + ": "
         else: self.scenario_label = ""
+
+        self.sim_data_loc = sim_data_loc
         
         super().__init__(units, time_unit, save_fig_loc, save_fig_dpi, overwrite_figs)
 
     def __str__(self): return "<{0}>".format(self.__name__)
     def __name__(self): return "MultiPlotter"
 
-    def add_simulations(self, simulations: list|tuple, labels: list|tuple|None=None, groups: str|list|tuple|None=None) -> None:
+    def add_simulations(self, simulations: list|tuple, labels: list|tuple|None=None, groups: str|list|tuple|None=None, pbar: bool=True) -> None:
         """
         Add simulation dataset(s) to the plotter. `simulations` and `labels` must have the same length, with each
         label corresponding to a simulation. By default, all simulations will use their scenario name as a labels,
@@ -2196,31 +2158,46 @@ class MultiPlotter(_GenericPlotter):
         group IDs corresponding to each simulation. By default, all simulations are not assigned a group, or set
         a group ID in the list to `None` to only assign specific simulations a group.
 
+        Note that large simulation data files may take some time to load. Errors may also occur when adding very
+        large numbers of simulation data files.
+
         Args:
             `simulations` (list, tuple): List of sim_data filepaths
             `labels` (list, tuple, None): List of simulation dataset labels
             `groups` (str, list, tuple, None): List of group IDs or single ID
+            `pbar` (bool): Denotes whether to print a progress bar when loading multiple files
         """
 
         start_step, end_step, step_length = None, None, None
 
+        if not isinstance(simulations, (list, tuple)): simulations = [simulations]
         validate_list_types(simulations, str, param_name="sim_data filenames")
 
         if labels == None: labels = [None]*len(simulations)
+        elif not isinstance(labels, (list, tuple)): labels = [labels]
+
         if len(labels) != len(simulations):
             desc = "Invalid sim_data labels (length '{0}' must match number of simulations '{1}').".format(len(labels), len(simulations))
             raise_error(ValueError, desc)
         validate_list_types(labels, (str, type(None)), param_name="sim_data labels")
         
         if groups == None: groups = [None]*len(simulations)
+        elif isinstance(groups, str): groups = [groups]*len(simulations)
+        elif not isinstance(groups, (list, tuple)): groups = [groups]
+
         if len(groups) != len(simulations):
             desc = "Invalid sim_data groups (length '{0}' must match number of simulations '{1}').".format(len(groups), len(simulations))
             raise_error(ValueError, desc)
         validate_list_types(groups, (str, type(None)), param_name="sim_data groups")
 
-        for simulation, sim_label, sim_group in zip(simulations, labels, groups):
+        itr = zip(simulations, labels, groups)
+        if pbar and len(simulations) > 1: itr = tqdm(itr, "Loading sim_data files", len(simulations))
 
+        for simulation, sim_label, sim_group in itr:
+            
+            simulation = self.sim_data_loc + simulation
             sim_id = len(self.sim_datasets) + 1
+
             if simulation.endswith(".json"): r_class, r_mode = json, "r"
             elif simulation.endswith(".pkl"): r_class, r_mode = pkl, "rb"
             else:
@@ -2522,3 +2499,114 @@ class MultiPlotter(_GenericPlotter):
         fig.tight_layout()
 
         self._display_figure(save_fig)
+
+    def plot_throughput(self, od_pair: list|tuple|None=None, vehicle_types: list|tuple|None=None, plot_range: bool=True, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
+        """
+        Plot vehicle throughput, ie. the rate of completed trips, for each simulation.
+        
+        Args:
+            `od_pair` (list, tuple, None): (n x 2) list containing OD pairs. If not given, all OD pairs are plotted
+            `vehicle_types` (list, tuple, None): List of vehicle types to include (defaults to all)
+            `plot_range` (bool): Denotes whether to plot minimum-maximum value range for groups as a shaded region
+            `time_range` (list, tuple, None): Plotting time range (in plotter class units)
+            `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+            `plt_colour` (str, None): Line colour for plot (defaults to TUD 'blauw')
+            `fig_title` (str, None): If given, will overwrite default title
+            `save_fig` (str, None): Output image filename, will show image if not given
+        """
+        
+        fig, ax = plt.subplots(1, 1)
+
+        all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
+        x_lim, max_y_val = [math.inf, -math.inf], -math.inf
+        for sim_id, sim_data in self.sim_datasets.items():
+
+            x_vals, y_vals = _get_throughput_x_y(sim_data, self.time_unit, od_pair, vehicle_types, time_range)
+
+            x_lim = [min(min(x_vals), x_lim[0]), max(max(x_vals), x_lim[1])]
+            max_y_val = max(max(y_vals), max_y_val)
+            if sim_id not in self.sim_groups:
+                ax.plot(x_vals, y_vals, label=self.sim_labels[sim_id], color=self._get_colour("WHEEL", plotted==0))
+                plotted += 1
+            else:
+                all_group_data[self.sim_groups[sim_id]].append((x_vals, y_vals))
+
+        for group_id, group_data in all_group_data.items():
+            if len(group_data) > 0:
+                min_y, max_y, avg_y = [], [], []
+                x_vals = group_data[0][0]
+                
+                n_vals = len(x_vals)
+                for idx in range(n_vals):
+                    y_vals = [all_vals[1][idx] for all_vals in group_data]
+
+                    min_y.append(min(y_vals))
+                    max_y.append(max(y_vals))
+                    avg_y.append(sum(y_vals) / len(y_vals))
+
+                colour = self._get_colour("WHEEL", plotted==0)
+                ax.plot(x_vals, avg_y, label=group_id, color=colour)
+                if plot_range: ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
+                plotted += 1
+
+        if fig_title == None:
+            if od_pair == None: fig_title = "{0}Network Throughput".format(self.scenario_label)
+            else: fig_title = "{0}'{1}' → '{2}' Trip Throughput".format(self.scenario_label, od_pair[0], od_pair[1])
+        ax.set_title(fig_title, pad=20)
+
+        if plotted > 1: ax.legend(shadow=True)
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels["throughput"])
+        ax.set_xlim(x_lim)
+        ax.set_ylim([0, get_axis_lim(max_y_val)])
+        self._add_grid(ax, None)
+
+        self._plot_event(ax, show_events)
+        
+        fig.tight_layout()
+
+        self._display_figure(save_fig)
+
+def _get_throughput_x_y(sim_data: dict, time_unit: str, od_pair: list|tuple|None=None, vehicle_types: list|tuple|None=None, time_range: list|tuple|None=None):
+    if time_range == None: t_range = [-math.inf, math.inf]
+    else: t_range = convert_units(time_range, time_unit, "steps", sim_data["step_len"])
+
+    com_trip_data = sim_data["data"]["trips"]["completed"]
+
+    completion_times = []
+    for trip in com_trip_data.values():
+        
+        if "arrival" not in trip: continue
+        origin, destination, arrival, veh_type = trip["origin"], trip["destination"], trip["arrival"], trip["vehicle_type"]
+
+        if vehicle_types != None and veh_type not in vehicle_types: continue
+        elif od_pair != None and origin != od_pair[0]: continue
+        elif od_pair != None and destination != od_pair[1]: continue
+        elif arrival <= t_range[0] or arrival >= t_range[1]: continue
+        else:
+            completion_times.append(trip["arrival"])
+
+    if len(completion_times) == 0:
+        desc = "No trip data to plot."
+        raise_error(ValueError, desc)
+
+    start = int(max(t_range[0], sim_data["start"]))
+    end = int(min(t_range[1], sim_data["end"]))
+
+    x_vals = list(range(start, end + 1))
+    y_vals = [0] * (len(x_vals))
+    for val in completion_times:
+        if val - start < len(y_vals):
+            y_vals[val - start] += 1
+
+    q1 = np.quantile(x_vals, 0.25)
+    q3 = np.quantile(x_vals, 0.75)
+    aggregation_steps = math.ceil((2 * (q3 - q1)) / (len(x_vals) ** (1 / 3)))
+    y_vals, x_vals = get_aggregated_data(y_vals, x_vals, aggregation_steps, False)
+
+    x_vals, y_vals = [start]+x_vals, [0]+y_vals
+    x_vals = convert_units(x_vals, "steps", time_unit, sim_data["step_len"])
+    agg_time = convert_units(aggregation_steps, "steps", "hours", sim_data["step_len"])
+    y_vals = [val / agg_time for val in y_vals]
+
+    return x_vals, y_vals
