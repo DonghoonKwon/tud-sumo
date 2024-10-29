@@ -16,13 +16,13 @@ class _GenericPlotter():
     def __init__(self, units: str="METRIC", time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True):
 
         self._default_labels = {"no_vehicles": "No. of Vehicles", "no_waiting": "No. of Waiting Vehicles", "tts": "Total Time Spent (s)", "delay": "Delay (s)", "throughput": "Throughput (veh/hr)",
-                                "vehicle_counts": "No. of Vehicles", "occupancies": "Occupancy (%)", "densities": "Density unit", "metres": "Distance (m)", "kilometres": "Distance (km)",
+                                "vehicle_counts": "No. of Vehicles", "flows": "Flow (vehicles/hour)", "occupancies": "Occupancy (%)", "densities": "Density unit", "metres": "Distance (m)", "kilometres": "Distance (km)",
                                 "yards": "Distance (yd)", "feet": "Distance (ft)", "miles": "Distance (mi)", "m/s": "Speed (m/s)", "kmph": "Speed (kmph)", "mph": "Speed (mph)", "steps": "Time (Simulation Steps)",
                                 "seconds": "Time (s)", "minutes": "Time (m)", "hours": "Time (hr)"}
 
         self._default_titles = {"no_vehicles": "Number of Vehicles", "no_waiting": "Number of Waiting Vehicles", "tts": "Total Time Spent", "delay": "Delay",
                                 "vehicle_counts": "Number of Vehicles", "occupancies": "Vehicle Occupancies", "densities": "Vehicle Density",
-                                "speeds": "Average Speed", "limits": "Speed Limit", "throughput": "Throughput"}
+                                "speeds": "Average Vehicle Speed", "flows": "Vehicle Flow", "limits": "Speed Limit", "throughput": "Throughput"}
 
         # TU Delft colours as defined here: https://www.tudelft.nl/huisstijl/bouwstenen/kleur
         self._tud_colours = {"cyaan": "#00A6D6", "donkerblauw": "#0C2340", "turkoois": "#00B8C8", "blauw": "#0076C2", "paars": "#6F1D77", "roze": "#EF60A3",
@@ -207,7 +207,7 @@ class _GenericPlotter():
                         ax.text(event_start + ((event_end - event_start)/2), y_lim[1] * 0.9, event_id, horizontalalignment='center', color="red", zorder=10)
 
 class Plotter(_GenericPlotter):
-    """ Visualisation class that plots TUD-SUMO specific data for one simulation. """
+    """ Visualisation class that plots TUD-SUMO data for one simulation. """
 
     def __init__(self, simulation: Simulation|str, sim_label: str|None=None, time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
         """
@@ -983,6 +983,69 @@ class Plotter(_GenericPlotter):
         if fig_title == None:
             fig_title = "{0} (Detector '{1}')".format(self._default_titles[data_key], detector_id)
             if plot_cumulative: fig_title = "Cumulative "+fig_title
+            fig_title = self.sim_label + fig_title
+        ax.set_title(fig_title, pad=20)
+
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels[data_key])
+        ax.set_xlim([x_vals[0], x_vals[-1]])
+        if data_key == "occupancies": ax.set_ylim([0, 100])
+        else: ax.set_ylim([0, get_axis_lim(y_vals)])
+        self._add_grid(ax, None)
+
+        self._plot_event(ax, show_events)
+        
+        fig.tight_layout()
+
+        self._display_figure(save_fig)
+
+    def plot_edge_data(self, edge_id: str, data_key: str, plot_cumulative: bool=False, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, plt_colour: str|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
+        """
+        Plot tracked egde data.
+        
+        Args:
+            `edge_id` (str): Tracked edge ID
+            `data_key` (str): Data key to plot, either '_flows_', '_speeds_', '_densities_', '_occupancies_', '_vehicle_counts_'
+            `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
+            `aggregation_steps` (int, None): If given, values are aggregated using this interval
+            `time_range` (list, tuple, None): Plotting time range (in plotter class units)
+            `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+            `plt_colour` (str, None): Line colour for plot (defaults to TUD 'blauw')
+            `fig_title` (str, None): If given, will overwrite default title
+            `save_fig` (str, None): Output image filename, will show image if not given
+        """
+        
+        if self.simulation != None:
+            self.sim_data = self.simulation.__dict__()
+            self.units = self.simulation.units.name
+
+        fig, ax = plt.subplots(1, 1)
+        start, step = self.sim_data["start"], self.sim_data["step_len"]
+
+        if "edges" not in self.sim_data["data"].keys():
+            desc = "No TrackedEdge data found."
+            raise_error(KeyError, desc)
+        elif data_key not in ["flows", "speeds", "densities", "occupancies", "vehicle_counts"]:
+            desc = "Unrecognised data key '{0}' (must be [flows|speeds|densities|occupancies|vehicle_counts]).".format(data_key)
+            raise_error(KeyError, desc)
+        elif edge_id not in self.sim_data["data"]["edges"].keys():
+            desc = "Edge ID '{0}' not found.".format(edge_id)
+            raise_error(KeyError, desc)
+        
+        y_vals = self.sim_data["data"]["edges"][edge_id][data_key if data_key != "vehicle_counts" else "step_vehicles"]
+        if data_key == "occupancies": y_vals = [val * 100 for val in y_vals]
+        elif data_key == "vehicle_counts": y_vals = [len(step_data) for step_data in y_vals]
+        if plot_cumulative: y_vals = get_cumulative_arr(y_vals)
+        x_vals = get_time_steps(y_vals, self.time_unit, step, start)
+        x_vals, y_vals = limit_vals_by_range(x_vals, y_vals, time_range)
+
+        if aggregation_steps != None:
+            y_vals, x_vals = get_aggregated_data(y_vals, x_vals, aggregation_steps)
+
+        ax.plot(x_vals, y_vals, color=self._get_colour(plt_colour))
+
+        if fig_title == None:
+            fig_title = "'{0}' {1}{2}".format(edge_id, "Cumulative " if plot_cumulative else "", self._default_titles[data_key])
             fig_title = self.sim_label + fig_title
         ax.set_title(fig_title, pad=20)
 
@@ -2097,7 +2160,7 @@ class Plotter(_GenericPlotter):
         self._display_figure(save_fig)
 
 class MultiPlotter(_GenericPlotter):
-    """ Visualisation class that plots TUD-SUMO specific data for multiple simulations. """
+    """ Visualisation class that plots TUD-SUMO data for multiple simulations. """
 
     def __init__(self, scenario_label: str|None=None, units: str="metric", time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True) -> None:
         """
@@ -2139,15 +2202,21 @@ class MultiPlotter(_GenericPlotter):
             `groups` (str, list, tuple, None): List of group IDs or single ID
         """
 
+        start_step, end_step, step_length = None, None, None
+
         validate_list_types(simulations, str, param_name="sim_data filenames")
 
-        if labels != None: validate_list_types(labels, tuple([(str,None)]*len(simulations)), True, "sim_data labels")
-        else: labels = [None]*len(simulations)
-
-        if groups != None:
-            if isinstance(groups, str): groups = [groups]*len(simulations)
-            else: validate_list_types(groups, tuple([(str,None)]*len(simulations)), True, "sim_data groups")
-        else: groups = [None]*len(simulations)
+        if labels == None: labels = [None]*len(simulations)
+        if len(labels) != len(simulations):
+            desc = "Invalid sim_data labels (length '{0}' must match number of simulations '{1}').".format(len(labels), len(simulations))
+            raise_error(ValueError, desc)
+        validate_list_types(labels, (str, type(None)), param_name="sim_data labels")
+        
+        if groups == None: groups = [None]*len(simulations)
+        if len(groups) != len(simulations):
+            desc = "Invalid sim_data groups (length '{0}' must match number of simulations '{1}').".format(len(groups), len(simulations))
+            raise_error(ValueError, desc)
+        validate_list_types(groups, (str, type(None)), param_name="sim_data groups")
 
         for simulation, sim_label, sim_group in zip(simulations, labels, groups):
 
@@ -2167,6 +2236,20 @@ class MultiPlotter(_GenericPlotter):
                         desc = "Invalid Simulation '{0}', units mismatch (must be MultiPlotter unit '{1}', not '{2}').".format(sim_label, sim_units, self.units)
                         raise_error(ValueError, desc)
 
+                    if start_step == None:
+                        start_step, end_step, step_length = sim_data["start"], sim_data["end"], sim_data["step_len"]
+                        
+                    else:
+                        if start_step != sim_data["start"]:
+                            desc = "Invalid Simulation '{0}' (start time '{1}' does not match previous '{2}').".format(sim_label, sim_data["start"], start_step)
+                            raise_error(ValueError, desc)
+                        if end_step != sim_data["end"]:
+                            desc = "Invalid Simulation '{0}' (end time '{1}' does not match previous '{2}').".format(sim_label, sim_data["end"], end_step)
+                            raise_error(ValueError, desc)
+                        if step_length != sim_data["step_len"]:
+                            desc = "Invalid Simulation '{0}' (step length '{1}' does not match previous '{2}').".format(sim_label, sim_data["step_len"], step_length)
+                            raise_error(ValueError, desc)
+
                     self.sim_datasets[sim_id] = sim_data
 
                     if sim_group != None:
@@ -2180,13 +2263,14 @@ class MultiPlotter(_GenericPlotter):
                 desc = "Simulation file '{0}' not found.".format(simulation)
                 raise_error(FileNotFoundError, desc)
 
-    def plot_vehicle_data(self, data_key: str, plot_cumulative: bool=False, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
+    def plot_vehicle_data(self, data_key: str, plot_cumulative: bool=False, plot_range: bool=True, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
         """
         Plot network-wide vehicle data for each simulation.
         
         Args:
             `data_key` (str): Data key to plot, either '_no_vehicles_', '_no_waiting_', '_tts_' or '_delay_'
             `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
+            `plot_range` (bool): Denotes whether to plot minimum-maximum value range for groups as a shaded region
             `aggregation_steps` (int, None): If given, values are aggregated using this interval
             `time_range` (list, tuple, None): Plotting time range (in plotter class units)
             `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
@@ -2237,7 +2321,7 @@ class MultiPlotter(_GenericPlotter):
 
                 colour = self._get_colour("WHEEL", plotted==0)
                 ax.plot(x_vals, avg_y, label=group_id, color=colour)
-                ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
+                if plot_range: ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
                 plotted += 1
 
         if fig_title == None:
@@ -2259,7 +2343,7 @@ class MultiPlotter(_GenericPlotter):
 
         self._display_figure(save_fig)
 
-    def plot_detector_data(self, detector_id: str, data_key: str, plot_cumulative: bool=False, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
+    def plot_detector_data(self, detector_id: str, data_key: str, plot_cumulative: bool=False, plot_range: bool=True, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
         """
         Plot detector data from each simulation.
         
@@ -2267,6 +2351,7 @@ class MultiPlotter(_GenericPlotter):
             `detector_id` (str): Detector ID
             `data_key` (str): Data key to plot, either '_speeds_', '_vehicle_counts_' or '_occupancies_'
             `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
+            `plot_range` (bool): Denotes whether to plot minimum-maximum value range for groups as a shaded region
             `aggregation_steps` (int, None): If given, values are aggregated using this interval
             `time_range` (list, tuple, None): Plotting time range (in plotter class units)
             `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
@@ -2325,12 +2410,102 @@ class MultiPlotter(_GenericPlotter):
 
                 colour = self._get_colour("WHEEL", plotted==0)
                 ax.plot(x_vals, avg_y, label=group_id, color=colour)
-                ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
+                if plot_range: ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
                 plotted += 1
 
         if fig_title == None:
             fig_title = "{0} (Detector '{1}')".format(self._default_titles[data_key], detector_id)
             if plot_cumulative: fig_title = "Cumulative "+fig_title
+            fig_title = self.scenario_label + fig_title
+        ax.set_title(fig_title, pad=20)
+
+        if plotted > 1: ax.legend(shadow=True)
+        ax.set_xlabel(self._default_labels["sim_time"])
+        ax.set_ylabel(self._default_labels[data_key])
+        ax.set_xlim(x_lim)
+        if data_key == "occupancies": ax.set_ylim([0, 100])
+        else: ax.set_ylim([0, get_axis_lim(max_y_val)])
+        self._add_grid(ax, None)
+
+        self._plot_event(ax, show_events)
+        
+        fig.tight_layout()
+
+        self._display_figure(save_fig)
+
+    def plot_edge_data(self, edge_id: str, data_key: str, plot_cumulative: bool=False, plot_range: bool=True, aggregation_steps: int|None=None, time_range: list|tuple|None=None, show_events: str|list|None=None, fig_title: str|None=None, save_fig: str|None=None) -> None:
+        """
+        Plot tracked edge data from each simulation.
+        
+        Args:
+            `edge_id` (str): Tracked edge ID
+            `data_key` (str): Data key to plot, either '_flows_', '_speeds_', '_densities_', '_occupancies_', '_vehicle_counts_'
+            `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
+            `plot_range` (bool): Denotes whether to plot minimum-maximum value range for groups as a shaded region
+            `aggregation_steps` (int, None): If given, values are aggregated using this interval
+            `time_range` (list, tuple, None): Plotting time range (in plotter class units)
+            `show_events` (str, list, None): Event ID, list of IDs, '_all_', '_scheduled_', '_active_', '_completed_' or `None`
+            `fig_title` (str, None): If given, will overwrite default title
+            `save_fig` (str, None): Output image filename, will show image if not given
+        """
+  
+        if data_key not in ["flows", "speeds", "densities", "occupancies", "vehicle_counts"]:
+            desc = "Unrecognised data key '{0}' (must be [flows|speeds|densities|occupancies|vehicle_counts]).".format(data_key)
+            raise_error(KeyError, desc)
+        
+        fig, ax = plt.subplots(1, 1)
+
+        all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
+        x_lim, max_y_val = [math.inf, -math.inf], -math.inf
+        for sim_id, sim_data in self.sim_datasets.items():
+
+            if "edges" not in sim_data["data"].keys():
+                desc = "No TrackedEdge data found."
+                raise_error(KeyError, desc)
+            elif edge_id not in sim_data["data"]["edges"].keys():
+                desc = "Edge ID '{0}' not found in Simulation '{1}'.".format(edge_id, self.sim_labels[sim_id])
+                raise_error(KeyError, desc)
+
+            start, step = sim_data["start"], sim_data["step_len"]
+            y_vals = sim_data["data"]["edges"][edge_id][data_key if data_key != "vehicle_counts" else "step_vehicles"]
+            if data_key == "occupancies": y_vals = [val * 100 for val in y_vals]
+            elif data_key == "vehicle_counts": y_vals = [len(step_data) for step_data in y_vals]
+            if plot_cumulative: y_vals = get_cumulative_arr(y_vals)
+            x_vals = get_time_steps(y_vals, self.time_unit, step, start)
+            x_vals, y_vals = limit_vals_by_range(x_vals, y_vals, time_range)
+
+            x_lim = [min(min(x_vals), x_lim[0]), max(max(x_vals), x_lim[1])]
+            
+            if aggregation_steps != None:
+                y_vals, x_vals = get_aggregated_data(y_vals, x_vals, aggregation_steps)
+
+            max_y_val = max(max(y_vals), max_y_val)
+            if sim_id not in self.sim_groups:
+                ax.plot(x_vals, y_vals, label=self.sim_labels[sim_id], color=self._get_colour("WHEEL", plotted==0))
+                plotted += 1
+            else:
+                all_group_data[self.sim_groups[sim_id]].append((x_vals, y_vals))
+
+        for group_id, group_data in all_group_data.items():
+            if len(group_data) > 0:
+                min_y, max_y, avg_y = [], [], []
+                x_vals = group_data[0][0]
+                
+                n_vals = len(x_vals)
+                for idx in range(n_vals):
+                    y_vals = [all_vals[1][idx] for all_vals in group_data]
+
+                    min_y.append(min(y_vals))
+                    max_y.append(max(y_vals))
+                    avg_y.append(sum(y_vals) / len(y_vals))
+
+                colour = self._get_colour("WHEEL", plotted==0)
+                ax.plot(x_vals, avg_y, label=group_id, color=colour)
+                if plot_range: ax.fill_between(x_vals, min_y, max_y, color=colour, alpha=0.2)
+                plotted += 1
+
+        if fig_title == None:
+            fig_title = "'{0}' {1}{2}".format(edge_id, "Cumulative " if plot_cumulative else "", self._default_titles[data_key])
             fig_title = self.scenario_label + fig_title
         ax.set_title(fig_title, pad=20)
 
