@@ -1,6 +1,6 @@
 import json, os, math, inspect
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timedelta
 import traci.constants as tc
 import pickle as pkl
 from difflib import SequenceMatcher
@@ -224,6 +224,10 @@ def get_time_steps(data_vals, unit, step_len=None, start=0):
 def get_time_str():
     date_str = datetime.now().strftime(datetime_format)
     return date_str
+
+def get_sim_time_str(step_no, step_len) -> str:
+    seconds = step_no * step_len
+    return str(timedelta(seconds = seconds))
 
 def get_cumulative_arr(arr: list, start: int=0) -> list:
     arr = [0] + arr

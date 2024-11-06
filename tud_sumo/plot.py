@@ -2134,8 +2134,9 @@ class MultiPlotter(_GenericPlotter):
         """
 
         self.sim_datasets = {}
+        self.sim_dataset_ids = []
         self.sim_groups = {}
-        self.sim_group_ids = set()
+        self.sim_group_ids = []
         self.sim_labels = {}
                 
         if scenario_label != None: self.scenario_label = scenario_label + ": "
@@ -2191,7 +2192,7 @@ class MultiPlotter(_GenericPlotter):
         validate_list_types(groups, (str, type(None)), param_name="sim_data groups")
 
         itr = zip(simulations, labels, groups)
-        if pbar and len(simulations) > 1: itr = tqdm(itr, "Loading sim_data files", len(simulations))
+        if pbar and len(simulations) > 1: itr = tqdm(itr, "Loading sim_data files", len(simulations), unit="file(s)", colour='CYAN')
 
         for simulation, sim_label, sim_group in itr:
             
@@ -2227,11 +2228,14 @@ class MultiPlotter(_GenericPlotter):
                             desc = "Invalid Simulation '{0}' (step length '{1}' does not match previous '{2}').".format(sim_label, sim_data["step_len"], step_length)
                             raise_error(ValueError, desc)
 
+                    if "all_vehicles" in sim_data["data"]: del sim_data["data"]["all_vehicles"]
+
                     self.sim_datasets[sim_id] = sim_data
+                    self.sim_dataset_ids.append(sim_id)
 
                     if sim_group != None:
                         self.sim_groups[sim_id] = sim_group
-                        self.sim_group_ids.add(sim_group)
+                        if sim_group not in self.sim_group_ids: self.sim_group_ids.append(sim_group)
 
                     if sim_label != None: self.sim_labels[sim_id] = sim_label
                     else: self.sim_labels[sim_id] = sim_data["scenario_name"]
@@ -2263,7 +2267,8 @@ class MultiPlotter(_GenericPlotter):
 
         all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
         x_lim, max_y_val = [math.inf, -math.inf], -math.inf
-        for sim_id, sim_data in self.sim_datasets.items():
+        for sim_id in self.sim_dataset_ids:
+            sim_data = self.sim_datasets[sim_id]
 
             start, step = sim_data["start"], sim_data["step_len"]
             y_vals = sim_data["data"]["vehicles"][data_key]
@@ -2344,7 +2349,8 @@ class MultiPlotter(_GenericPlotter):
 
         all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
         x_lim, max_y_val = [math.inf, -math.inf], -math.inf
-        for sim_id, sim_data in self.sim_datasets.items():
+        for sim_id in self.sim_dataset_ids:
+            sim_data = self.sim_datasets[sim_id]
 
             if detector_id not in sim_data["data"]["detectors"].keys():
                 desc = "Detector ID '{0}' not found in Simulation '{1}'.".format(detector_id, self.sim_labels[sim_id])
@@ -2434,7 +2440,8 @@ class MultiPlotter(_GenericPlotter):
 
         all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
         x_lim, max_y_val = [math.inf, -math.inf], -math.inf
-        for sim_id, sim_data in self.sim_datasets.items():
+        for sim_id in self.sim_dataset_ids:
+            sim_data = self.sim_datasets[sim_id]
 
             if "edges" not in sim_data["data"].keys():
                 desc = "No TrackedEdge data found."
@@ -2519,7 +2526,8 @@ class MultiPlotter(_GenericPlotter):
 
         all_group_data, plotted = {group_id: [] for group_id in self.sim_group_ids}, 0
         x_lim, max_y_val = [math.inf, -math.inf], -math.inf
-        for sim_id, sim_data in self.sim_datasets.items():
+        for sim_id in self.sim_dataset_ids:
+            sim_data = self.sim_datasets[sim_id]
 
             x_vals, y_vals = _get_throughput_x_y(sim_data, self.time_unit, od_pair, vehicle_types, time_range)
 

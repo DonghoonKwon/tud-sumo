@@ -141,9 +141,10 @@ class Simulation:
                 raise_error(ValueError, desc)
         else:
             sumoCMD += ["-n", net_file]
-            if route_file != None: sumoCMD += ["-r", route_file]
-            if add_file != None: sumoCMD += ["-a", add_file]
-            if gui_file != None: sumoCMD += ["-c", gui_file]
+            
+        if route_file != None: sumoCMD += ["-r", route_file]
+        if add_file != None: sumoCMD += ["-a", add_file]
+        if gui_file != None: sumoCMD += ["-c", gui_file]
         
         if self.scenario_name == None:
             for filename in [config_file, net_file, route_file, add_file]:
@@ -981,7 +982,8 @@ class Simulation:
                 create_pbar, self._pbar_length = True, n_steps
 
         if create_pbar:
-            self._pbar = tqdm(desc="Simulating (step {0}, {1} vehs)".format(self.curr_step, len(self._all_curr_vehicle_ids)), total=self._pbar_length)
+            self._pbar = tqdm(desc="Simulating ({0} - {1} vehs)".format(get_sim_time_str(self.curr_step, self.step_length), len(self._all_curr_vehicle_ids)),
+                              total=self._pbar_length, unit="steps", colour='CYAN')
 
         while self.curr_step < end_step:
 
@@ -1014,7 +1016,7 @@ class Simulation:
             # Stop updating progress bar if reached total (even if simulation is continuing)
             if isinstance(self._pbar, tqdm):
                 self._pbar.update(1)
-                self._pbar.set_description("Simulating (step {0}, {1} vehs)".format(self.curr_step, len(self._all_curr_vehicle_ids)))
+                self._pbar.set_description("Simulating ({0} - {1} vehs)".format(get_sim_time_str(self.curr_step, self.step_length), len(self._all_curr_vehicle_ids)))
                 if self._pbar.n == self._pbar.total:
                     self._pbar, self._pbar_length = None, None
 
@@ -1136,7 +1138,7 @@ class Simulation:
             data["vehicles"]["no_vehicles"] = no_vehicles
             data["vehicles"]["no_waiting"] = no_waiting
             data["vehicles"]["tts"] = no_vehicles * self.step_length
-            data["vehicles"]["delay"] = no_waiting * self.step_length
+            data["vehicles"]["delay"] = no_waiting * self.step_length # Delay should be updated to include vehicles waiting to be inserted
 
             if self.track_juncs:
                 for junc_id, junc in self.tracked_junctions.items():
@@ -1199,6 +1201,55 @@ class Simulation:
             desc = "No data to return (simulation likely has not been run, or data has been reset)."
             raise_error(SimulationError, desc, self.curr_step)
         return self._all_data["data"]["vehicles"]["delay"][-1]
+    
+    def get_interval_vehicle_data(self, data_keys: list|tuple, n_steps: int, interval_end: int = 0, get_avg: bool=False) -> float|dict:
+        """
+        Returns network-wide vehicle data in the simulation during range (`curr step - n_step - interval_end -> curr_step - interval_end`).
+        Valid data keys are; '_tts_', '_delay_', '_no_vehicles_' and '_no_waiting_'. By default, all values are totalled throughout the interval
+        unless `get_avg == True`. If multiple data keys are given, the resulting data is returned in a dictionary by each key.
+        
+        Args:
+            `data_keys` (str, list): Data key or list of keys
+            `n_steps` (int): Interval length in steps (max at number of steps the simulation has run)
+            `interval_end` (int): Steps since end of interval (`0 = current step`)
+            `get_avg` (bool): Denotes whether to return the step average delay instead of the total
+
+        Returns:
+            float: Total delay in seconds
+        """
+        
+        if self._all_data == None:
+            desc = "No data to return (simulation likely has not been run, or data has been reset)."
+            raise_error(SimulationError, desc, self.curr_step)
+        elif n_steps + interval_end > self._all_data["end"] - self._all_data["start"]:
+            desc = "Not enough data (n_steps '{0}' + interval_end '{1}' > '{2}').".format(n_steps, interval_end, self._all_data["end"] - self._all_data["start"])
+            raise_error(ValueError, desc, self.curr_step)
+        elif not isinstance(n_steps, int):
+            desc = "Invalid n_steps '{0}' (must be int, not '{1}').".format(n_steps, type(n_steps).__name__)
+            raise_error(TypeError, desc, self.curr_step)
+        elif n_steps <= 1:
+            desc = "Invalid n_steps '{0}' (must be >1).".format(n_steps)
+            raise_error(ValueError, desc, self.curr_step)
+        
+        if not isinstance(data_keys, (list, tuple)): data_keys = [data_keys]
+
+        all_data = {}
+        for data_key in data_keys:
+
+            valid_keys = ["tts", "delay", "no_vehicles", "no_waiting"]
+            error, desc = test_valid_string(data_key, valid_keys, "data key")
+            if error != None: raise_error(error, desc)
+
+            if interval_end <= 0: data_val = self._all_data["data"]["vehicles"][data_key][-n_steps:]
+            else: data_val = self._all_data["data"]["vehicles"][data_key][-(n_steps + interval_end):-interval_end]
+            
+            data_val = sum(data_val)
+            if get_avg: data_val /= len(data_val)
+
+            all_data[data_key] = data_val
+        
+        if len(data_keys) == 1: return all_data[data_keys[0]]
+        else: return all_data
     
     def _add_v_func(self, functions, parameters: dict, func_arr: list, valid_sim_params: list) -> None:
         """
@@ -4317,12 +4368,14 @@ def print_summary(sim_data: dict|str, save_file: str|None=None, tab_width: int=5
                 for line in event_lines: _table_print(line, tab_width)
 
     print(secondary_delineator)
+    
+    sys.stdout = old_stdout
+    summary = buffer.getvalue()
 
     if save_file != None:
-        sys.stdout = old_stdout
-        summary = buffer.getvalue()
         with open(save_file, "w") as fp:
             fp.write(summary)
+    else:
         print(summary)
 
 def _table_print(strings=None, tab_width=58, side=" | ", padding=" ", centre_cols=False):
