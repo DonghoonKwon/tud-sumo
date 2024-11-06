@@ -1202,7 +1202,7 @@ class Simulation:
             raise_error(SimulationError, desc, self.curr_step)
         return self._all_data["data"]["vehicles"]["delay"][-1]
     
-    def get_interval_vehicle_data(self, data_keys: list|tuple, n_steps: int, interval_end: int = 0, get_avg: bool=False) -> float|dict:
+    def get_interval_network_data(self, data_keys: list|tuple, n_steps: int, interval_end: int = 0, get_avg: bool=False) -> float|dict:
         """
         Returns network-wide vehicle data in the simulation during range (`curr step - n_step - interval_end -> curr_step - interval_end`).
         Valid data keys are; '_tts_', '_delay_', '_no_vehicles_' and '_no_waiting_'. By default, all values are totalled throughout the interval
