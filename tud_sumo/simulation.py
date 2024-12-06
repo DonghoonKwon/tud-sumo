@@ -103,7 +103,7 @@ class Simulation:
             `suppress_pbar` (bool): Suppress automatic progress bar when not using the GUI
             `seed` (bool): Either int to be used as seed, or `random.random()`/`random.randint()`, where a random seed is used
             `gui` (bool): Bool denoting whether to run GUI
-            `sumo_home` (str, None): SUMO base directory, if `$SUMO_HOME` variable not already set within environment
+            `sumo_home` (str, None): SUMO base directory, if the `$SUMO_HOME` variable is not already set within the environment
         """
 
         if isinstance(sumo_home, str):
@@ -226,8 +226,39 @@ class Simulation:
 
         # Get network file using sumolib to fetch information about
         # the network itself.
-        self.network_file = traci.simulation.getOption("net-file")
-        self.network = sumolib.net.readNet(self.network_file)
+        network_file = traci.simulation.getOption("net-file")
+        network = sumolib.net.readNet(network_file)
+
+        self._lane_info = {}
+        for l_id in self._all_lanes:
+            lane = network.getLane(l_id)
+
+            len_units = "kilometres" if self.units.name == "METRIC" else "miles"
+            length = convert_units(LineString(lane.getShape()).length, "metres", len_units)
+
+            s_units = "kmph" if self.units.name == "METRIC" else "mph"
+            max_speed = convert_units(traci.lane.getMaxSpeed(l_id), "m/s", s_units)
+
+            self._lane_info[l_id] = {"length": length, "max_speed": max_speed}
+
+        self._edge_info = {}
+        for e_id in self._all_edges:
+            edge = network.getEdge(e_id)
+            lane_ids = [f"{e_id}_{idx}" for idx in range(traci.edge.getLaneNumber(e_id))]
+
+            self._edge_info[e_id] = {"incoming_edges": [incoming.getID() for incoming in edge.getIncoming()],
+                                     "outgoing_edges": [outgoing.getID() for outgoing in edge.getOutgoing()],
+                                     "junction_ids": [edge.getFromNode().getID(), edge.getToNode().getID()],
+                                     "linestring": edge.getShape(),
+                                     "street_name": traci.edge.getStreetName(e_id),
+                                     "n_lanes": len(lane_ids),
+                                     "lane_ids": lane_ids
+                                     }
+            
+            len_unit = "miles" if self.units.name == "IMPERIAL" else "kilometres"
+            e_length = LineString(self._edge_info[e_id]["linestring"]).length
+            self._edge_info[e_id]["length"] = convert_units(e_length, "metres", len_unit)
+            self._edge_info[e_id]["max_speed"] = sum([self._lane_info[l_id]["max_speed"] for l_id in lane_ids]) / len(lane_ids)
 
         all_route_ids, self._all_routes = list(traci.route.getIDList()), {}
         for route_id in all_route_ids:
@@ -948,7 +979,7 @@ class Simulation:
                 if self.track_juncs: all_data["data"]["junctions"] = {}
                 if len(self.tracked_edges) > 0: all_data["data"]["edges"] = {}
                 if len(self.controllers) > 0: all_data["data"]["controllers"] = {}
-                all_data["data"]["vehicles"] = {"no_vehicles": [], "no_waiting": [], "tts": [], "delay": []}
+                all_data["data"]["vehicles"] = {"no_vehicles": [], "no_waiting": [], "tts": [], "twt": [], "delay": []}
                 if self._manual_flow and self._demand_arrs != None:
                     all_data["data"]["demand"] = {"headers": self._demand_headers, "table": self._demand_arrs}
                 all_data["data"]["trips"] = {"incomplete": {}, "completed": {}}
@@ -1069,7 +1100,7 @@ class Simulation:
 
         # Add all automatic subscriptions
         if self._automatic_subscriptions:
-            subscriptions = ["speed", "lane_idx"]
+            subscriptions = ["speed", "lane_idx", "lane_id"]
 
             # Subscribing to 'altitude' uses POSITION3D, which includes the vehicle x,y coordinates.
             # If not collecting all individual vehicle data, we can instead subcribe to the 2D position.
@@ -1134,11 +1165,12 @@ class Simulation:
 
                 data["detectors"][detector_id]["vehicle_ids"] = self.get_last_step_detector_vehicles(detector_id)
 
-            no_vehicles, no_waiting, all_v_data = self.get_all_vehicle_data(vehicle_types=vehicle_types, all_dynamic_data=False)
+            no_vehicles, no_waiting, delay, all_v_data = self.get_all_vehicle_data(vehicle_types=vehicle_types)
             data["vehicles"]["no_vehicles"] = no_vehicles
             data["vehicles"]["no_waiting"] = no_waiting
             data["vehicles"]["tts"] = no_vehicles * self.step_length
-            data["vehicles"]["delay"] = no_waiting * self.step_length # Delay should be updated to include vehicles waiting to be inserted
+            data["vehicles"]["twt"] = no_waiting * self.step_length
+            data["vehicles"]["delay"] = delay # Delay should be updated to include vehicles waiting to be inserted
 
             if self.track_juncs:
                 for junc_id, junc in self.tracked_junctions.items():
@@ -2989,7 +3021,8 @@ class Simulation:
         """
         Get data values for specific vehicle using a list of data keys. Valid data keys are; '_type_', '_length_',
         '_speed_', '_is_stopped_', '_max_speed_', '_acceleration_', '_position_', '_altitude_', '_heading_', '_departure_',
-        '_edge_id_', '_lane_idx_', '_origin_', '_destination_', '_route_id_', '_route_idx_', '_route_edges_'.
+        '_edge_id_', '_lane_id_', '_lane_idx_', '_origin_', '_destination_', '_route_id_', '_route_idx_', '_route_edges_',
+        '_delay_'.
         
         Args:
             `vehicle_ids` (str, list, tuple): Vehicle ID or list of IDs
@@ -3050,7 +3083,8 @@ class Simulation:
                         data_vals[data_key] = convert_units(speed, "m/s", units)
 
                     case "is_stopped":
-                        if tc.VAR_SPEED in subscribed_data: speed = subscribed_data[tc.VAR_SPEED]
+                        if "speed" in data_vals: speed = data_vals["speed"]
+                        elif tc.VAR_SPEED in subscribed_data: speed = subscribed_data[tc.VAR_SPEED]
                         else: speed = traci.vehicle.getSpeed(vehicle_id)
                         data_vals[data_key] = speed < 0.1
 
@@ -3092,6 +3126,11 @@ class Simulation:
                         else: edge_id = traci.vehicle.getRoadID(vehicle_id)
                         data_vals[data_key] = edge_id
 
+                    case "lane_id":
+                        if tc.VAR_LANE_ID in subscribed_data: lane_id = subscribed_data[tc.VAR_LANE_ID]
+                        else: lane_id = traci.vehicle.getLaneID(vehicle_id)
+                        data_vals[data_key] = lane_id
+
                     case "lane_idx":
                         if tc.VAR_LANE_INDEX in subscribed_data: lane_idx = subscribed_data[tc.VAR_LANE_INDEX]
                         else: lane_idx = traci.vehicle.getLaneIndex(vehicle_id)
@@ -3120,6 +3159,27 @@ class Simulation:
                     case "route_edges":
                         route = list(traci.vehicle.getRoute(vehicle_id))
                         data_vals[data_key] = route
+
+                    case "delay":
+                        if "speed" in data_vals:
+                            units = "kmph" if self.units.name == "METRIC" else "mph"
+                            curr_speed = convert_units(data_vals["speed"], units, "m/s")
+                        else:
+                            if tc.VAR_SPEED in subscribed_data: curr_speed = subscribed_data[tc.VAR_SPEED]
+                            else: curr_speed = traci.vehicle.getSpeed(vehicle_id)
+
+                        if speed > 0:
+
+                            if tc.VAR_LANE_ID in subscribed_data: lane_id = subscribed_data[tc.VAR_LANE_ID]
+                            else: lane_id = traci.vehicle.getLaneID(vehicle_id)
+                            ff_speed = self.get_geometry_vals(lane_id, "max_speed") # May need to improve free-flow speed definition!
+                            
+                            #delay = max(self.step_length * ((ff_speed / curr_speed) - 1), 0)
+                            delay = self.step_length * ((ff_speed - curr_speed) / ff_speed)
+                        
+                        else: delay = self.step_length
+                            
+                        data_vals[data_key] = delay
 
             if len(vehicle_ids) == 1:
                 if return_val: return list(data_vals.values())[0]
@@ -3151,7 +3211,7 @@ class Simulation:
                 raise_error(KeyError, desc, self.curr_step)
             
             static_data_keys = ("type", "length", "departure", "origin")
-            dynamic_data_keys = ("speed", "acceleration", "is_stopped", "position", "altitude", "heading", "destination")
+            dynamic_data_keys = ("speed", "acceleration", "delay", "is_stopped", "position", "altitude", "heading", "destination")
             vehicle_data = self.get_vehicle_vals(vehicle_id, dynamic_data_keys)
 
             if vehicle_id not in self._known_vehicles.keys(): new_vehicle = True
@@ -3167,6 +3227,7 @@ class Simulation:
                                                     "latitude":     vehicle_data["position"][1],
                                                     "speed":        vehicle_data["speed"],
                                                     "acceleration": vehicle_data["acceleration"],
+                                                    "delay":        vehicle_data["delay"],
                                                     "is_stopped":   vehicle_data["is_stopped"],
                                                     "length":       static_veh_data["length"],
                                                     "heading":      vehicle_data["heading"],
@@ -3179,14 +3240,14 @@ class Simulation:
             else:
 
                 # Update _known_vehicles with dynamic data
-                self._known_vehicles[vehicle_id]["speed"]        = vehicle_data["speed"]
-                self._known_vehicles[vehicle_id]["acceleration"] = vehicle_data["acceleration"]
-                self._known_vehicles[vehicle_id]["is_stopped"]   = vehicle_data["is_stopped"]
-                self._known_vehicles[vehicle_id]["longitude"]    = vehicle_data["position"][0]
-                self._known_vehicles[vehicle_id]["latitude"]     = vehicle_data["position"][1]
-                self._known_vehicles[vehicle_id]["heading"]      = vehicle_data["heading"]
-                self._known_vehicles[vehicle_id]["altitude"]     = vehicle_data["altitude"]
-                self._known_vehicles[vehicle_id]["destination"]  = vehicle_data["destination"]
+                for key in dynamic_data_keys:
+                    if key != "position":
+                        self._known_vehicles[vehicle_id][key] = vehicle_data[key]
+                    else:
+                        coors = vehicle_data[key]
+                        self._known_vehicles[vehicle_id]["longitude"] = coors[0]
+                        self._known_vehicles[vehicle_id]["latitude"] = coors[1]
+
                 self._known_vehicles[vehicle_id]["last_seen"]    = self.curr_step
 
             vehicle_data = copy(self._known_vehicles[vehicle_id])
@@ -3199,20 +3260,19 @@ class Simulation:
 
         return all_vehicle_data
 
-    def get_all_vehicle_data(self, vehicle_types: list|tuple|None = None, all_dynamic_data: bool=True) -> dict:
+    def get_all_vehicle_data(self, vehicle_types: list|tuple|None = None) -> dict:
         """
         Collects aggregated vehicle data (no. vehicles & no. waiting vehicles) and all individual vehicle data.
         
         Args:
             `vehicle_types` (list, tuple, None): Type(s) of vehicles to include
-            `all_dynamic_data` (bool): Denotes whether to return all individual static & dynamic vehicle data (returns empty dictionary if false)
         
         Returns:
             dict: no vehicles, no waiting, all vehicle data
         """
 
         all_vehicle_data = {}
-        total_vehicle_data = {"no_vehicles": 0, "no_waiting": 0}
+        total_vehicle_data = {"no_vehicles": 0, "no_waiting": 0, "delay": 0}
 
         for vehicle_id in self._all_curr_vehicle_ids:
 
@@ -3221,24 +3281,30 @@ class Simulation:
 
             if vehicle_types is None or (isinstance(vehicle_types, (list, tuple)) and vehicle_type in vehicle_types) or (isinstance(vehicle_types, str) and vehicle_type == vehicle_types):
 
-                if self._get_individual_vehicle_data or all_dynamic_data:
+                if self._get_individual_vehicle_data:
                     vehicle_data = self.get_vehicle_data(vehicle_id)
                     all_vehicle_data[vehicle_id] = vehicle_data
-                    if vehicle_data["is_stopped"]: total_vehicle_data["no_waiting"] += 1
-
-                elif self.get_vehicle_vals(vehicle_id, "is_stopped"): total_vehicle_data["no_waiting"] += 1
+                else: vehicle_data = self.get_vehicle_vals(vehicle_id, ["speed", "is_stopped", "delay"])
 
                 total_vehicle_data["no_vehicles"] += 1
+                if vehicle_data["is_stopped"]: total_vehicle_data["no_waiting"] += 1
+                total_vehicle_data["delay"] += vehicle_data["delay"]
 
-        return total_vehicle_data["no_vehicles"], total_vehicle_data["no_waiting"], all_vehicle_data
+        return total_vehicle_data["no_vehicles"], total_vehicle_data["no_waiting"], total_vehicle_data["delay"], all_vehicle_data
     
     def get_geometry_vals(self, geometry_ids: str|list|tuple, data_keys: str|list) -> dict|str|int|float|list:
         """
-        Get data values for specific edge or lane using a list of data keys. Valid data keys are; (edge or lane) '_vehicle_count_',
-        '_vehicle_ids_', '_vehicle_speed_', '_avg_vehicle_length_',  '_halting_no_', '_vehicle_occupancy_', '_curr_travel_time_',
-        '_ff_travel_time_', '_emissions_', '_length_', '_max_speed_' | (edge only) '_connected_edges_', '_incoming_edges_',
-        '_outgoing_edges_', '_street_name_', '_n_lanes_', '_lane_ids_' | (lane only) '_edge_id_', '_n_links_', '_allowed_',
-        '_disallowed_', '_left_lc_', '_right_lc_'.
+        Get data values for specific edge or lane using a list of data keys. Valid data keys are:
+        
+        **Edge or Lane**:
+        '_vehicle_count_', '_vehicle_ids_', '_vehicle_speed_', '_avg_vehicle_length_', '_halting_no_', '_vehicle_occupancy_',
+        '_curr_travel_time_', '_ff_travel_time_', '_emissions_', '_length_', '_max_speed_'
+        
+        **Edge only**:
+        '_connected_edges_', '_incoming_edges_', '_outgoing_edges_', '_street_name_', '_n_lanes_', '_lane_ids_', '_linestring_'
+        
+        **Lane only**: 
+        '_edge_id_', '_n_links_', '_allowed_', '_disallowed_', '_left_lc_', '_right_lc_'.
         
         Args:
             `geometry_ids` (str, int): Edge/lane ID or list of IDs
@@ -3255,7 +3321,7 @@ class Simulation:
         for geometry_id in geometry_ids:
             g_name = self.geometry_exists(geometry_id)
             if g_name == "edge": g_class = traci.edge
-            elif g_name == "lane": g_class = traci.lane
+            elif g_name == "lane" or geometry_id.startswith(":"): g_class = traci.lane
             else:
                 desc = "Geometry ID '{0}' not found.".format(geometry_id)
                 raise_error(KeyError, desc, self.curr_step)
@@ -3338,47 +3404,33 @@ class Simulation:
                         continue
 
                     case "length":
-                        if geometry_id in self.get_tracked_edge_ids():
-                            length = self.tracked_edges[geometry_id].length
-                        else:
-                            if g_name == "edge": geometry = self.network.getEdge(geometry_id)
-                            else: geometry = self.network.getLane(geometry_id)
-                            length = LineString(geometry.getShape()).length
-                            
-                            units = "kilometres" if self.units.name == "METRIC" else "miles"
-                        data_vals[data_key] = convert_units(length, "metres", units)
-                        continue
-                        
-                if g_name == "edge":
-                    match data_key:
-                        
-                        case "connected_edges":
-                            data_vals[data_key] = {'incoming': [e.getID() for e in self.network.getEdge(geometry_id).getIncoming()],
-                                                   'outgoing': [e.getID() for e in self.network.getEdge(geometry_id).getOutgoing()]}
-                        case "incoming_edges":
-                            data_vals[data_key] = [e.getID() for e in self.network.getEdge(geometry_id).getIncoming()]
-                        case "outgoing_edges":
-                            data_vals[data_key] = [e.getID() for e in self.network.getEdge(geometry_id).getOutgoing()]
-                        case "junction_ids":
-                            edge = self.network.getEdge(geometry_id)
-                            data_vals[data_key] = [edge.getToNode().getID(), edge.getFromNode().getID()]
-                        case "street_name":
-                            data_vals[data_key] = g_class.getStreetName(geometry_id)
-                        case "n_lanes":
-                            data_vals[data_key] = g_class.getLaneNumber(geometry_id)
-                        case "lane_ids":
-                            n_lanes = g_class.getLaneNumber(geometry_id)
-                            data_vals[data_key] = ["{0}_{1}".format(geometry_id, idx) for idx in range(n_lanes)]
-                        case "max_speed":
-                            n_lanes = g_class.getLaneNumber(geometry_id)
-                            lane_ids = ["{0}_{1}".format(geometry_id, idx) for idx in range(n_lanes)]
-                            avg_lane_speed = sum([traci.lane.getMaxSpeed(lane_id) for lane_id in lane_ids])/len(lane_ids)
+                        if g_name == "edge": length = self._edge_info[geometry_id][data_key]
+                        else: length = self._lane_info[geometry_id][data_key]
 
-                            units = "kmph" if self.units.name == "METRIC" else "mph"
-                            data_vals[data_key] = convert_units(avg_lane_speed, "m/s", units)
-                        case _:
-                            desc = "Invalid data key '{0}' (only valid for lanes, not edges).".format(data_key)
-                            raise_error(ValueError, desc, self.curr_step)
+                        data_vals[data_key] = length
+                        continue
+
+                    case "max_speed":
+                        if geometry_id in self._edge_info: max_speed = self._edge_info[geometry_id][data_key]
+                        elif geometry_id in self._lane_info: max_speed = self._lane_info[geometry_id][data_key]
+                        else: max_speed = g_class.getMaxSpeed(geometry_id)
+
+                        data_vals[data_key] = max_speed
+                        continue
+                    
+                if g_name == "edge":
+                    
+                    if data_key == "connected_edges":
+                        data_vals[data_key] = {'incoming': self._edge_info[geometry_id]["incoming_edges"],
+                                               'outgoing': self._edge_info[geometry_id]["outgoing_edges"]}
+                        
+                    elif data_key in self._edge_info[geometry_id].keys():
+                        data_vals[data_key] = self._edge_info[geometry_id][data_key]
+                    
+                    else:
+                        desc = "Invalid data key '{0}' (only valid for lanes, not edges).".format(data_key)
+                        raise_error(ValueError, desc, self.curr_step)
+                    
                 elif g_name == "lane":
                     match data_key:
                         case "edge_id":
@@ -3393,9 +3445,6 @@ class Simulation:
                             data_vals[data_key] = g_class.getChangePermissions(geometry_id, 0)
                         case "right_lc":
                             data_vals[data_key] = g_class.getChangePermissions(geometry_id, 1)
-                        case "max_speed":
-                            units = "kmph" if self.units.name == "METRIC" else "mph"
-                            data_vals[data_key] = convert_units(g_class.getMaxSpeed(geometry_id), "m/s", units)
                         case _:
                             desc = "Invalid data key '{0}' (only valid for edges, not lanes).".format(data_key)
                             raise_error(ValueError, desc, self.curr_step)
@@ -3439,13 +3488,27 @@ class Simulation:
 
                 match command:
                     case "max_speed":
-                        if isinstance(value, (int, float)): 
-                            if value >= 0.1:
+                        if isinstance(value, (int, float)):
+                            min_unit = "kmph" if self.units.name == "METRIC" else "mph"
+                            min_value = round(convert_units(0.1, "m/s", min_unit), 2)
+                            if value >= min_value:
+                                
+                                if g_name == "lane":
+                                    edge_id = self.get_geometry_vals(geometry_id, "edge_id")
+                                    self._lane_info[geometry_id]["max_speed"] = value
+                                    lane_ids = self._edge_info[edge_id]["lane_ids"]
+                                    self._edge_info[edge_id]["max_speed"] = sum([self._lane_info[l_id]["max_speed"] for l_id in lane_ids]) / len(lane_ids)
+                                else:
+                                    lane_ids = self._edge_info[geometry_id]["lane_ids"]
+                                    for l_id in lane_ids: self._lane_info[l_id]["max_speed"] = value
+                                    self._edge_info[geometry_id]["max_speed"] = value
+
                                 units = "kmph" if self.units.name == "METRIC" else "mph"
-                                g_class.setMaxSpeed(geometry_id, convert_units(value, units, "m/s"))
+                                new_speed = convert_units(value, units, "m/s")
+                                g_class.setMaxSpeed(geometry_id, new_speed)
+                                
                             else:
-                                unit = "km/h" if self.units.name == "METRIC" else "mph"
-                                desc = "({0}): Invalid speed value '{1}' (must be >= 0.1{2}).".format(command, value, unit)
+                                desc = f"({command}): Invalid speed value '{value}{min_unit}' (must be >= {min_value}{min_unit})."
                                 raise_error(ValueError, desc, self.curr_step)
                         else:
                             desc = "({0}): Invalid max_speed value '{1}' (must be [int|float], not '{2}').".format(command, value, type(value).__name__)
@@ -3830,9 +3893,11 @@ class TrackedJunction:
         self.id = junc_id
         self.sim = simulation
 
-        node = self.sim.network.getNode(junc_id)
-        self.incoming_edges = [e.getID() for e in node.getIncoming()]
-        self.outgoing_edges = [e.getID() for e in node.getOutgoing()]
+        self.incoming_edges, self.outgoing_edges = [], []
+        for e_id, e_info in self.sim._edge_info.items():
+            if self.id == e_info["junction_ids"][0]: self.outgoing_edges.append(e_id)
+            elif self.id == e_info["junction_ids"][1]: self.incoming_edges.append(e_id)
+
         self.position = traci.junction.getPosition(junc_id)
         
         self.init_time = self.sim.curr_step
@@ -4093,17 +4158,11 @@ class TrackedEdge:
         self.init_time = self.sim.curr_step
         self.curr_time = self.sim.curr_step
 
-        edge = self.sim.network.getEdge(edge_id)
-
-        self.linestring = edge.getShape()
-        self.line = LineString(self.linestring)
-        self.length_unit = "miles" if self.sim.units.name == "IMPERIAL" else "kilometres"
-        self.length = convert_units(self.line.length, "metres", self.length_unit)
+        self.linestring = self.sim._edge_info[self.id]["linestring"]
+        self.length = self.sim._edge_info[self.id]["length"]
+        self.from_node, self.to_node = self.sim._edge_info[self.id]["junction_ids"]
 
         self.n_lanes = self.sim.get_geometry_vals(self.id, "n_lanes")
-
-        self.to_node = edge.getToNode().getID()
-        self.from_node = edge.getFromNode().getID()
 
         self.step_vehicles = []
         self.flows = []
@@ -4203,8 +4262,8 @@ def print_summary(sim_data: dict|str, save_file: str|None=None, tab_width: int=5
     if save_file != None:
         save_file = validate_type(save_file, str, "save_file")
         if not save_file.endswith(".txt"): save_file += ".txt"
-        old_stdout = sys.stdout
-        sys.stdout = buffer = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buffer = io.StringIO()
     
     sim_data = validate_type(sim_data, (str, dict), "sim_data")
     if isinstance(sim_data, str):
@@ -4249,17 +4308,17 @@ def print_summary(sim_data: dict|str, save_file: str|None=None, tab_width: int=5
     start_time, end_time = datetime.strptime(sim_data["sim_start"], datetime_format), datetime.strptime(sim_data["sim_end"], datetime_format)
     sim_duration, sim_duration_steps = end_time - start_time, end_step - start_step
     if start_time.date() == end_time.date():
-        _table_print("Simulation Run: "+start_time.strftime(date_format), tab_width)
-        _table_print("{0} - {1} ({2})".format(start_time.strftime(time_format), end_time.strftime(time_format), sim_duration), tab_width)
+        _table_print(f"Simulation Run: {start_time.strftime(date_format)}", tab_width)
+        _table_print(f"{start_time.strftime(time_format)} - {end_time.strftime(time_format)} ({sim_duration})", tab_width)
     else:
-        _table_print("Simulation Run: ({0})".format(sim_duration), tab_width)
+        _table_print(f"Simulation Run: ({sim_duration})", tab_width)
         _table_print([start_time.strftime(date_format), end_time.strftime(date_format)], tab_width, centre_cols=True)
         _table_print([start_time.strftime(time_format), end_time.strftime(time_format)], tab_width, centre_cols=True)
     
     print(secondary_delineator)
-    _table_print(["Number of Steps:", "{0}".format(sim_duration_steps, start_step, end_step)], tab_width)
-    _table_print(["Step Length:", sim_data["step_len"]], tab_width)
-    _table_print(["Avg. Step Duration:", str(sim_duration.total_seconds() / sim_duration_steps)+"s"], tab_width)
+    _table_print(["Number of Steps:", f"{sim_duration_steps} ({start_step}-{end_step})"], tab_width)
+    _table_print(["Step Length:", f"{sim_data['step_len']}s"], tab_width)
+    _table_print(["Avg. Step Duration:", f"{sim_duration.total_seconds() / sim_duration_steps}s"], tab_width)
     _table_print(["Units Type:", unit_desc[sim_data["units"]]], tab_width)
     _table_print(["Seed:", sim_data["seed"]], tab_width)
     
@@ -4269,22 +4328,28 @@ def print_summary(sim_data: dict|str, save_file: str|None=None, tab_width: int=5
     _table_print("Vehicle Data", tab_width)
     print(secondary_delineator)
 
-    _table_print(["Avg. No. Vehicles:", round(sum(sim_data["data"]["vehicles"]["no_vehicles"])/len(sim_data["data"]["vehicles"]["no_vehicles"]), 2)], tab_width)
-    _table_print(["Peak No. Vehicles:", int(max(sim_data["data"]["vehicles"]["no_vehicles"]))], tab_width)
-    _table_print(["Avg. No. Waiting Vehicles:", round(sum(sim_data["data"]["vehicles"]["no_waiting"])/len(sim_data["data"]["vehicles"]["no_waiting"]), 2)], tab_width)
-    _table_print(["Peak No. Waiting Vehicles:", int(max(sim_data["data"]["vehicles"]["no_waiting"]))], tab_width)
-    _table_print(["Final No. Vehicles:", int(sim_data["data"]["vehicles"]["no_vehicles"][-1])], tab_width)
+    labels = {"no_vehicles": ["No. Vehicles", "Overall TTS"],
+              "no_waiting": ["No. Waiting Vehicles", "Overall TWT"],
+              "delay": ["Vehicle Delay", "Cumulative Delay"]}
+
+    for key, label in labels.items():
+        data = sim_data["data"]["vehicles"][key]
+        unit = "s" if key == "delay" else ""
+        _table_print(f"{label[0]}:", tab_width)
+        _table_print(["Average:", f"{round(sum(data)/len(data), 2)}{unit}"], tab_width)
+        _table_print(["Peak:", f"{round(max(data), 2)}{unit}"], tab_width)
+        _table_print(["Final:", f"{round(data[-1], 2)}{unit}"], tab_width)
+        _table_print([f"{label[1]}:", f"{round(sum(data), 2)}s"], tab_width)
+        print(tertiary_delineator)
+
     _table_print(["Individual Data:", "Yes" if "all_vehicles" in sim_data["data"].keys() else "No"], tab_width)
-    print(tertiary_delineator)
-    _table_print(["Total TTS:", "{0}s".format(round(sum(sim_data["data"]["vehicles"]["tts"]), 2))], tab_width)
-    _table_print(["Total Delay:", "{0}s".format(round(sum(sim_data["data"]["vehicles"]["delay"]), 2))], tab_width)
 
     print(secondary_delineator)
     _table_print("Trip Data", tab_width)
     print(secondary_delineator)
     n_inc, n_com = len(sim_data["data"]["trips"]["incomplete"]), len(sim_data["data"]["trips"]["completed"])
-    _table_print(["Incomplete Trips:", "{0} ({1}%)".format(n_inc, round(100 * n_inc / (n_inc + n_com), 1))], tab_width)
-    _table_print(["Completed Trips:", "{0} ({1}%)".format(n_com, round(100 * n_com / (n_inc + n_com), 1))], tab_width)
+    _table_print(["Incomplete Trips:", f"{n_inc} ({round(100 * n_inc / (n_inc + n_com), 2)}%)"], tab_width)
+    _table_print(["Completed Trips:", f"{n_com} ({round(100 * n_com / (n_inc + n_com), 1)}%)"], tab_width)
 
     print(secondary_delineator)
     _table_print("Detectors", tab_width)

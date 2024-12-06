@@ -15,7 +15,7 @@ time_desc = {"s": "Seconds", "m": "Minutes", "hr": "Hours"}
 traci_constants = {"vehicle": {
                                 "speed": tc.VAR_SPEED, "is_stopped": tc.VAR_SPEED, "max_speed": tc.VAR_MAXSPEED, "acceleration": tc.VAR_ACCELERATION,
                                 "position": tc.VAR_POSITION, "altitude": tc.VAR_POSITION3D, "heading": tc.VAR_ANGLE, "edge_id": tc.VAR_ROAD_ID,
-                                "lane_idx": tc.VAR_LANE_INDEX, "route_id": tc.VAR_ROUTE_ID, "route_idx": tc.VAR_ROUTE_INDEX},
+                                "lane_id": tc.VAR_LANE_ID, "lane_idx": tc.VAR_LANE_INDEX, "route_id": tc.VAR_ROUTE_ID, "route_idx": tc.VAR_ROUTE_INDEX},
                    "detector": {
                                 "vehicle_count": tc.LAST_STEP_VEHICLE_NUMBER, "vehicle_ids": tc.LAST_STEP_VEHICLE_ID_LIST, "lsm_speed": tc.LAST_STEP_MEAN_SPEED,
                                 "halting_no": tc.LAST_STEP_VEHICLE_HALTING_NUMBER, "lsm_occupancy": tc.LAST_STEP_OCCUPANCY, "last_detection": tc.LAST_STEP_TIME_SINCE_DETECTION},
@@ -27,11 +27,11 @@ traci_constants = {"vehicle": {
 valid_detector_val_keys = ["type", "position", "vehicle_count", "vehicle_ids", "lsm_speed", "halting_no", "last_detection", "lsm_occupancy", "avg_vehicle_length"]
 
 valid_set_vehicle_val_keys = ["colour", "highlight", "speed", "max_speed", "acceleration", "lane_idx", "destination", "route_id", "route_edges", "speed_safety_checks", "lc_safety_checks"]
-valid_get_vehicle_val_keys = ["type", "length", "departure", "origin", "destination", "route_edges"] + list(traci_constants["vehicle"].keys())
+valid_get_vehicle_val_keys = ["type", "length", "departure", "origin", "destination", "route_edges", "delay"] + list(traci_constants["vehicle"].keys())
 
 valid_set_geometry_val_keys = ["max_speed", "allowed", "disallowed", "left_lc", "right_lc"]
 valid_get_geometry_val_keys = ["avg_vehicle_length", "curr_travel_time", "ff_travel_time", "emissions", "length", "connected_edges", "incoming_edges", "outgoing_edges", "junction_ids",
-                               "street_name", "n_lanes", "lane_ids", "max_speed", "egde_id", "n_links"] + valid_set_geometry_val_keys + list(traci_constants["geometry"].keys())
+                               "street_name", "n_lanes", "lane_ids", "max_speed", "edge_id", "n_links", "linestring"] + valid_set_geometry_val_keys + list(traci_constants["geometry"].keys())
 
 class Units(Enum):
     METRIC = 1
@@ -285,7 +285,7 @@ def load_params(parameters: str|dict, params_name: str|None = None, step: int|No
 
     return parameters
 
-def get_aggregated_data(data_vals, time_steps, interval, avg=True):
+def get_aggregated_data(data_vals, time_steps, interval, avg=True, min0=True):
     """
     Args:
         `data_vals` (list): Data values array
@@ -300,7 +300,7 @@ def get_aggregated_data(data_vals, time_steps, interval, avg=True):
     agg_start, agg_data, agg_steps = 0, [], []
     while agg_start < len(data_vals):
         period_data = data_vals[agg_start:int(min(agg_start+interval, len(data_vals)))]
-        period_data = [max(val, 0) for val in period_data]
+        if min0: period_data = [max(val, 0) for val in period_data]
         if avg: agg_data.append(sum(period_data) / len(period_data))
         else: agg_data.append(sum(period_data))
         period_data = time_steps[agg_start:int(min(agg_start+interval, len(time_steps)))]
