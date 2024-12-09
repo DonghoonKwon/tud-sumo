@@ -12,26 +12,85 @@ datetime_format = "%d/%m/%Y, %H:%M:%S"
 unit_desc = {"METRIC": "Metric (km, km/h)", "UK": "UK (km, mph)", "IMPERIAL": "Imperial (miles, mph)"}
 time_desc = {"s": "Seconds", "m": "Minutes", "hr": "Hours"}
 
-traci_constants = {"vehicle": {
-                                "speed": tc.VAR_SPEED, "is_stopped": tc.VAR_SPEED, "max_speed": tc.VAR_MAXSPEED, "acceleration": tc.VAR_ACCELERATION,
-                                "position": tc.VAR_POSITION, "altitude": tc.VAR_POSITION3D, "heading": tc.VAR_ANGLE, "edge_id": tc.VAR_ROAD_ID,
-                                "lane_id": tc.VAR_LANE_ID, "lane_idx": tc.VAR_LANE_INDEX, "route_id": tc.VAR_ROUTE_ID, "route_idx": tc.VAR_ROUTE_INDEX},
-                   "detector": {
-                                "vehicle_count": tc.LAST_STEP_VEHICLE_NUMBER, "vehicle_ids": tc.LAST_STEP_VEHICLE_ID_LIST, "lsm_speed": tc.LAST_STEP_MEAN_SPEED,
-                                "halting_no": tc.LAST_STEP_VEHICLE_HALTING_NUMBER, "lsm_occupancy": tc.LAST_STEP_OCCUPANCY, "last_detection": tc.LAST_STEP_TIME_SINCE_DETECTION},
-                   "geometry": {
-                                "vehicle_count": tc.LAST_STEP_VEHICLE_NUMBER, "vehicle_ids": tc.LAST_STEP_VEHICLE_ID_LIST, "vehicle_speed": tc.LAST_STEP_MEAN_SPEED,
-                                "halting_no": tc.LAST_STEP_VEHICLE_HALTING_NUMBER, "vehicle_occupancy": tc.LAST_STEP_OCCUPANCY}
-                  }
+valid_data_keys = { "detector": {
+                        "type": None,
+                        "position": None,
+                        "vehicle_count": tc.LAST_STEP_VEHICLE_NUMBER,
+                        "vehicle_ids": tc.LAST_STEP_VEHICLE_ID_LIST,
+                        "lsm_speed": tc.LAST_STEP_MEAN_SPEED,
+                        "halting_no": tc.LAST_STEP_VEHICLE_HALTING_NUMBER,
+                        "last_detection": tc.LAST_STEP_TIME_SINCE_DETECTION,
+                        "lsm_occupancy": tc.LAST_STEP_OCCUPANCY
+                    },
+                    "vehicle": {
+                        "type":          {"getter": True,  "setter": False, "tc": None},
+                        "colour":        {"getter": False, "setter": True,  "tc": None},
+                        "length":        {"getter": True,  "setter": False, "tc": None},
+                        "highlight":     {"getter": False, "setter": True,  "tc": None},
+                        "speed":         {"getter": True,  "setter": True,  "tc": tc.VAR_SPEED},
+                        "is_stopped":    {"getter": True,  "setter": False, "tc": tc.VAR_SPEED},
+                        "max_speed":     {"getter": True,  "setter": True,  "tc": tc.VAR_MAXSPEED},
+                        "allowed_speed": {"getter": True,  "setter": False, "tc": tc.VAR_ALLOWED_SPEED},
+                        "acceleration":  {"getter": True,  "setter": True,  "tc": tc.VAR_ACCELERATION},
+                        "position":      {"getter": True,  "setter": False, "tc": tc.VAR_POSITION},
+                        "altitude":      {"getter": True,  "setter": False, "tc": tc.VAR_POSITION3D},
+                        "heading":       {"getter": True,  "setter": False, "tc": tc.VAR_ANGLE},
+                        "departure":     {"getter": True,  "setter": False, "tc": None},
+                        "edge_id":       {"getter": True,  "setter": False, "tc": tc.VAR_ROAD_ID},
+                        "lane_id":       {"getter": True,  "setter": False, "tc": tc.VAR_LANE_ID},
+                        "lane_idx":      {"getter": True,  "setter": True,  "tc": tc.VAR_LANE_INDEX},
+                        "origin":        {"getter": True,  "setter": False, "tc": None},
+                        "destination":   {"getter": True,  "setter": True,  "tc": tc.VAR_ROUTE},
+                        "route_id":      {"getter": True,  "setter": True,  "tc": tc.VAR_ROUTE_ID},
+                        "route_idx":     {"getter": True,  "setter": False, "tc": tc.VAR_ROUTE_INDEX},
+                        "route_edges":   {"getter": True,  "setter": True,  "tc": None},
+                        "delay":         {"getter": True,  "setter": False, "tc": None},
+                        "leader_id":     {"getter": True,  "setter": False, "tc": tc.VAR_LEADER},
+                        "leader_dist":   {"getter": True,  "setter": False, "tc": tc.VAR_LEADER},
+                        "speed_safety_checks":   {"getter": False, "setter": True, "tc": None},
+                        "lc_safety_checks":      {"getter": False, "setter": True, "tc": None}
+                    },
+                    "geometry": {
+                        "vehicle_count":        {"class": "both", "setter": False, "tc": tc.LAST_STEP_VEHICLE_NUMBER},
+                        "vehicle_ids":          {"class": "both", "setter": False, "tc": tc.LAST_STEP_VEHICLE_ID_LIST},
+                        "vehicle_speed":        {"class": "both", "setter": False, "tc": tc.LAST_STEP_MEAN_SPEED},
+                        "avg_vehicle_length":   {"class": "both", "setter": False, "tc": tc.LAST_STEP_LENGTH},
+                        "halting_no":           {"class": "both", "setter": False, "tc": tc.LAST_STEP_VEHICLE_HALTING_NUMBER},
+                        "vehicle_occupancy":    {"class": "both", "setter": False, "tc": tc.LAST_STEP_OCCUPANCY},
+                        "curr_travel_time":     {"class": "both", "setter": False, "tc": None},
+                        "ff_travel_time":       {"class": "both", "setter": False, "tc": None},
+                        "emissions":            {"class": "both", "setter": False, "tc": None},
+                        "length":               {"class": "both", "setter": False, "tc": None},
+                        "max_speed":            {"class": "both", "setter": True,  "tc": None},
+                        "connected_edges":      {"class": "edge", "setter": False, "tc": None},
+                        "incoming_edges":       {"class": "edge", "setter": False, "tc": None},
+                        "outgoing_edges":       {"class": "edge", "setter": False, "tc": None},
+                        "junction_ids":         {"class": "edge", "setter": False, "tc": None},
+                        "linestring":           {"class": "edge", "setter": False, "tc": None},
+                        "street_name":          {"class": "edge", "setter": False, "tc": None},
+                        "n_lanes":              {"class": "edge", "setter": False, "tc": None},
+                        "lane_ids":             {"class": "edge", "setter": False, "tc": None},
+                        "edge_id":              {"class": "lane", "setter": False, "tc": None},
+                        "n_links":              {"class": "lane", "setter": False, "tc": None},
+                        "allowed":              {"class": "lane", "setter": True,  "tc": None},
+                        "disallowed":           {"class": "lane", "setter": True,  "tc": None},
+                        "left_lc":              {"class": "lane", "setter": True,  "tc": None},
+                        "right_lc":             {"class": "lane", "setter": True,  "tc": None},
+                    }}
 
-valid_detector_val_keys = ["type", "position", "vehicle_count", "vehicle_ids", "lsm_speed", "halting_no", "last_detection", "lsm_occupancy", "avg_vehicle_length"]
+traci_constants = {}
 
-valid_set_vehicle_val_keys = ["colour", "highlight", "speed", "max_speed", "acceleration", "lane_idx", "destination", "route_id", "route_edges", "speed_safety_checks", "lc_safety_checks"]
-valid_get_vehicle_val_keys = ["type", "length", "departure", "origin", "destination", "route_edges", "delay"] + list(traci_constants["vehicle"].keys())
+valid_detector_val_keys = list(valid_data_keys["detector"].keys())
+traci_constants["detector"] = {data_key: tc for data_key, tc in valid_data_keys["detector"].items() if tc != None}
 
-valid_set_geometry_val_keys = ["max_speed", "allowed", "disallowed", "left_lc", "right_lc"]
-valid_get_geometry_val_keys = ["avg_vehicle_length", "curr_travel_time", "ff_travel_time", "emissions", "length", "connected_edges", "incoming_edges", "outgoing_edges", "junction_ids",
-                               "street_name", "n_lanes", "lane_ids", "max_speed", "edge_id", "n_links", "linestring"] + valid_set_geometry_val_keys + list(traci_constants["geometry"].keys())
+valid_set_vehicle_val_keys = [data_key for data_key, cfg in valid_data_keys["vehicle"].items() if cfg["setter"]]
+valid_get_vehicle_val_keys = [data_key for data_key, cfg in valid_data_keys["vehicle"].items() if cfg["getter"]]
+traci_constants["vehicle"] = {data_key: cfg["tc"] for data_key, cfg in valid_data_keys["vehicle"].items() if cfg["tc"] != None}
+
+valid_get_edge_val_keys = [data_key for data_key, cfg in valid_data_keys["geometry"].items() if cfg["class"] != "lane"]
+valid_get_lane_val_keys = [data_key for data_key, cfg in valid_data_keys["geometry"].items() if cfg["class"] != "edge"]
+valid_set_geometry_val_keys = [data_key for data_key, cfg in valid_data_keys["geometry"].items() if cfg["setter"]]
+traci_constants["geometry"] = {data_key: cfg["tc"] for data_key, cfg in valid_data_keys["geometry"].items() if cfg["tc"] != None}
 
 class Units(Enum):
     METRIC = 1

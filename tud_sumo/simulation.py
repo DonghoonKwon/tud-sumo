@@ -1,5 +1,4 @@
 import os, sys, io, traci, sumolib, json, csv, math, inspect
-import traci.constants as tc
 import pickle as pkl
 import numpy as np
 from tqdm import tqdm
@@ -1100,7 +1099,7 @@ class Simulation:
 
         # Add all automatic subscriptions
         if self._automatic_subscriptions:
-            subscriptions = ["speed", "lane_idx", "lane_id"]
+            subscriptions = ["speed", "allowed_speed", "lane_idx"]
 
             # Subscribing to 'altitude' uses POSITION3D, which includes the vehicle x,y coordinates.
             # If not collecting all individual vehicle data, we can instead subcribe to the 2D position.
@@ -1299,7 +1298,7 @@ class Simulation:
             functions = [functions]
 
         for function in functions:
-            func_params_arr = list(inspect.getargspec(function).args)
+            func_params_arr = list(function.__code__.co_varnames)
             self._v_func_params[function.__name__] = {}
             func_arr.append(function)
 
@@ -1589,6 +1588,8 @@ class Simulation:
                 error, desc = test_valid_string(data_key, valid_detector_val_keys, "data key")
                 if error != None: raise_error(error, desc)
 
+                subscription_key = traci_constants["detector"][data_key] if data_key in traci_constants["detector"] else None
+
                 match data_key:
                     case "type":
                         detector_data[data_key] = detector_type
@@ -1597,19 +1598,20 @@ class Simulation:
                         detector_data[data_key] = self.available_detectors[detector_id][data_key]
 
                     case "vehicle_count":
-                        if tc.LAST_STEP_VEHICLE_ID_LIST in subscribed_data: vehicle_count = len(list(subscribed_data[tc.LAST_STEP_VEHICLE_ID_LIST]))
-                        elif tc.LAST_STEP_VEHICLE_NUMBER in subscribed_data: vehicle_count = subscribed_data[tc.LAST_STEP_VEHICLE_NUMBER]
+                        if "vehicle_ids" in detector_data: vehicle_count = len(detector_data["vehicle_ids"])
+                        elif traci_constants["detector"]["vehicle_ids"] in subscribed_data: vehicle_count = len(list(subscribed_data[traci_constants["detector"]["vehicle_ids"]]))
+                        elif subscription_key in subscribed_data: vehicle_count = subscribed_data[subscription_key]
                         else: vehicle_count = d_class.getLastStepVehicleNumber(detector_id)
                         detector_data[data_key] = vehicle_count
 
                     case "vehicle_ids":
-                        if tc.LAST_STEP_VEHICLE_ID_LIST in subscribed_data: vehicle_ids = subscribed_data[tc.LAST_STEP_VEHICLE_ID_LIST]
+                        if subscription_key in subscribed_data: vehicle_ids = subscribed_data[subscription_key]
                         else: vehicle_ids = d_class.getLastStepVehicleIDs(detector_id)
                         detector_data[data_key] = list(vehicle_ids)
 
                     case "lsm_speed":
                         if self.get_detector_vals(detector_id, "vehicle_count") > 0:
-                            if tc.LAST_STEP_MEAN_SPEED in subscribed_data: speed = subscribed_data[tc.LAST_STEP_MEAN_SPEED]
+                            if subscription_key in subscribed_data: speed = subscribed_data[subscription_key]
                             else: speed = d_class.getLastStepMeanSpeed(detector_id)
                             
                             if speed > 0:
@@ -1627,17 +1629,17 @@ class Simulation:
 
                         match detector_type:
                             case "multientryexit":
-                                if tc.LAST_STEP_VEHICLE_HALTING_NUMBER in subscribed_data: halting_no = subscribed_data[tc.LAST_STEP_VEHICLE_HALTING_NUMBER]
+                                if subscription_key in subscribed_data: halting_no = subscribed_data[subscription_key]
                                 else: halting_no = d_class.getLastStepHaltingNumber(detector_id)
                                 detector_data[data_key] = halting_no
                                 
                             case "inductionloop":
                                 if data_key == "lsm_occupancy":
-                                    if tc.LAST_STEP_OCCUPANCY in subscribed_data: occupancy = subscribed_data[tc.LAST_STEP_OCCUPANCY]
+                                    if subscription_key in subscribed_data: occupancy = subscribed_data[subscription_key]
                                     else: occupancy = d_class.getLastStepOccupancy(detector_id)
                                     detector_data[data_key] = occupancy / 100
                                 elif data_key == "last_detection":
-                                    if tc.LAST_STEP_TIME_SINCE_DETECTION in subscribed_data: last_detection = subscribed_data[tc.LAST_STEP_TIME_SINCE_DETECTION]
+                                    if subscription_key in subscribed_data: last_detection = subscribed_data[subscription_key]
                                     else: last_detection = d_class.getTimeSinceDetection(detector_id)
                                     detector_data[data_key] = last_detection
                                 elif data_key == "avg_vehicle_length":
@@ -2190,7 +2192,7 @@ class Simulation:
 
         for vehicle_id in vehicle_ids:
             if self.vehicle_exists(vehicle_id):
-                traci.vehicle.remove(vehicle_id, reason=tc.REMOVE_VAPORIZED)
+                traci.vehicle.remove(vehicle_id, reason=traci.constants.REMOVE_VAPORIZED)
                 self._vehicles_out(vehicle_id, is_removed=True)
             else:
                 desc = "Unrecognised vehicle ID given ('{0}').".format(vehicle_id)
@@ -2426,6 +2428,10 @@ class Simulation:
                 
                 # Subscriptions are added using the traci_constants dictionary in tud_sumo.utils
                 subscription_vars = [traci_constants["vehicle"][data_key] for data_key in data_keys]
+                if "leader_id" in subscription_vars or "leader_dist" in subscription_vars:
+                    if "leader_id" in subscription_vars: subscription_vars.remove("leader_id")
+                    if "leader_dist" in subscription_vars: subscription_vars.remove("leader_dist")
+                    traci.vehicle.subscribeLeader(vehicle_id, 100)
                 traci.vehicle.subscribe(vehicle_id, subscription_vars)
 
             else:
@@ -3020,9 +3026,9 @@ class Simulation:
     def get_vehicle_vals(self, vehicle_ids: str|list|tuple, data_keys: str|list) -> dict|str|int|float|list:
         """
         Get data values for specific vehicle using a list of data keys. Valid data keys are; '_type_', '_length_',
-        '_speed_', '_is_stopped_', '_max_speed_', '_acceleration_', '_position_', '_altitude_', '_heading_', '_departure_',
-        '_edge_id_', '_lane_id_', '_lane_idx_', '_origin_', '_destination_', '_route_id_', '_route_idx_', '_route_edges_',
-        '_delay_'.
+        '_speed_', '_is_stopped_', '_max_speed_', '_allowed_speed_', '_acceleration_', '_position_', '_altitude_',
+        '_heading_', '_departure_', '_edge_id_', '_lane_id_', '_lane_idx_', '_origin_', '_destination_', '_route_id_',
+        '_route_idx_', '_route_edges_', '_delay_'.
         
         Args:
             `vehicle_ids` (str, list, tuple): Vehicle ID or list of IDs
@@ -3059,6 +3065,8 @@ class Simulation:
 
                 error, desc = test_valid_string(data_key, valid_get_vehicle_val_keys, "data key")
                 if error != None: raise_error(error, desc, self.curr_step)
+
+                subscription_key = traci_constants["vehicle"][data_key] if data_key in traci_constants["vehicle"] else None
             
                 match data_key:
                     case "type":
@@ -3076,7 +3084,7 @@ class Simulation:
                         data_vals[data_key] = self._known_vehicles[vehicle_id][data_key]
 
                     case "speed":
-                        if tc.VAR_SPEED in subscribed_data: speed = subscribed_data[tc.VAR_SPEED]
+                        if subscription_key in subscribed_data: speed = subscribed_data[subscription_key]
                         else: speed = traci.vehicle.getSpeed(vehicle_id)
                         
                         units = "kmph" if self.units.name == "METRIC" else "mph"
@@ -3084,35 +3092,42 @@ class Simulation:
 
                     case "is_stopped":
                         if "speed" in data_vals: speed = data_vals["speed"]
-                        elif tc.VAR_SPEED in subscribed_data: speed = subscribed_data[tc.VAR_SPEED]
+                        elif subscription_key in subscribed_data: speed = subscribed_data[subscription_key]
                         else: speed = traci.vehicle.getSpeed(vehicle_id)
                         data_vals[data_key] = speed < 0.1
 
                     case "max_speed":
-                        if tc.VAR_MAXSPEED in subscribed_data: max_speed = subscribed_data[tc.VAR_MAXSPEED]
+                        if subscription_key in subscribed_data: max_speed = subscribed_data[subscription_key]
                         else: max_speed = traci.vehicle.getMaxSpeed(vehicle_id)
                         
                         units = "kmph" if self.units.name == "METRIC" else "mph"
                         data_vals[data_key] = convert_units(max_speed, "m/s", units)
 
+                    case "allowed_speed":
+                        if subscription_key in subscribed_data: allowed_speed = subscribed_data[subscription_key]
+                        else: allowed_speed = traci.vehicle.getAllowedSpeed(vehicle_id)
+                        
+                        units = "kmph" if self.units.name == "METRIC" else "mph"
+                        data_vals[data_key] = convert_units(allowed_speed, "m/s", units)
+
                     case "acceleration":
-                        if tc.VAR_ACCELERATION in subscribed_data: acceleration = subscribed_data[tc.VAR_ACCELERATION]
+                        if subscription_key in subscribed_data: acceleration = subscribed_data[subscription_key]
                         else: acceleration = traci.vehicle.getAcceleration(vehicle_id)
                         data_vals[data_key] = acceleration
 
                     case "position":
-                        if tc.VAR_POSITION in subscribed_data: position = list(subscribed_data[tc.VAR_POSITION])
-                        elif tc.VAR_POSITION3D in subscribed_data: position = list(subscribed_data[tc.VAR_POSITION3D])[:2]
+                        if subscription_key in subscribed_data: position = list(subscribed_data[subscription_key])
+                        elif traci_constants["vehicle"]["altitude"] in subscribed_data: position = list(subscribed_data[traci_constants["vehicle"]["altitude"]])[:2]
                         else: position = list(traci.vehicle.getPosition3D(vehicle_id))[:2]
                         data_vals[data_key] = tuple(position)
 
                     case "altitude":
-                        if tc.VAR_POSITION3D in subscribed_data: altitude = list(subscribed_data[tc.VAR_POSITION3D])[-1]
+                        if subscription_key in subscribed_data: altitude = list(subscribed_data[subscription_key])[-1]
                         else: altitude = list(traci.vehicle.getPosition3D(vehicle_id))[-1]
                         data_vals[data_key] = altitude
 
                     case "heading":
-                        if tc.VAR_ANGLE in subscribed_data: heading = subscribed_data[tc.VAR_ANGLE]
+                        if subscription_key in subscribed_data: heading = subscribed_data[subscription_key]
                         else: heading = traci.vehicle.getAngle(vehicle_id)
                         data_vals[data_key] = heading
 
@@ -3122,17 +3137,17 @@ class Simulation:
                         data_vals[data_key] = self._known_vehicles[vehicle_id][data_key]
 
                     case "edge_id":
-                        if tc.VAR_ROAD_ID in subscribed_data: edge_id = subscribed_data[tc.VAR_ROAD_ID]
+                        if subscription_key in subscribed_data: edge_id = subscribed_data[subscription_key]
                         else: edge_id = traci.vehicle.getRoadID(vehicle_id)
                         data_vals[data_key] = edge_id
 
                     case "lane_id":
-                        if tc.VAR_LANE_ID in subscribed_data: lane_id = subscribed_data[tc.VAR_LANE_ID]
+                        if subscription_key in subscribed_data: lane_id = subscribed_data[subscription_key]
                         else: lane_id = traci.vehicle.getLaneID(vehicle_id)
                         data_vals[data_key] = lane_id
 
                     case "lane_idx":
-                        if tc.VAR_LANE_INDEX in subscribed_data: lane_idx = subscribed_data[tc.VAR_LANE_INDEX]
+                        if subscription_key in subscribed_data: lane_idx = subscribed_data[subscription_key]
                         else: lane_idx = traci.vehicle.getLaneIndex(vehicle_id)
                         data_vals[data_key] = lane_idx
 
@@ -3142,17 +3157,17 @@ class Simulation:
                         data_vals[data_key] = self._known_vehicles[vehicle_id][data_key]
 
                     case "destination":
-                        if tc.VAR_ROUTE in subscribed_data: route = subscribed_data[tc.VAR_ROUTE]
+                        if subscription_key in subscribed_data: route = subscribed_data[subscription_key]
                         else: route = list(traci.vehicle.getRoute(vehicle_id))
                         data_vals[data_key] = route[-1]
 
                     case "route_id":
-                        if tc.VAR_ROUTE_ID in subscribed_data: route_id = subscribed_data[tc.VAR_ROUTE_ID]
+                        if subscription_key in subscribed_data: route_id = subscribed_data[subscription_key]
                         else: route_id = traci.vehicle.getRouteID(vehicle_id)
                         data_vals[data_key] = route_id
 
                     case "route_idx":
-                        if tc.VAR_ROUTE_INDEX in subscribed_data: route_idx = subscribed_data[tc.VAR_ROUTE_INDEX]
+                        if subscription_key in subscribed_data: route_idx = subscribed_data[subscription_key]
                         else: route_idx = list(traci.vehicle.getRouteIndex(vehicle_id))
                         data_vals[data_key] = route_idx
 
@@ -3161,25 +3176,42 @@ class Simulation:
                         data_vals[data_key] = route
 
                     case "delay":
-                        if "speed" in data_vals:
-                            units = "kmph" if self.units.name == "METRIC" else "mph"
-                            curr_speed = convert_units(data_vals["speed"], units, "m/s")
-                        else:
-                            if tc.VAR_SPEED in subscribed_data: curr_speed = subscribed_data[tc.VAR_SPEED]
-                            else: curr_speed = traci.vehicle.getSpeed(vehicle_id)
+                        speed_units = "kmph" if self.units.name == "METRIC" else "mph"
+                        if "speed" in data_vals: curr_speed = data_vals["speed"]
+                        elif traci_constants["vehicle"]["speed"] in subscribed_data: curr_speed = subscribed_data[traci_constants["vehicle"]["speed"]]
+                        else: curr_speed = traci.vehicle.getSpeed(vehicle_id)
 
-                        if speed > 0:
+                        curr_speed = convert_units(data_vals["speed"], speed_units, "m/s")
 
-                            if tc.VAR_LANE_ID in subscribed_data: lane_id = subscribed_data[tc.VAR_LANE_ID]
-                            else: lane_id = traci.vehicle.getLaneID(vehicle_id)
-                            ff_speed = self.get_geometry_vals(lane_id, "max_speed") # May need to improve free-flow speed definition!
-                            
+                        if curr_speed > 0:
+                            # Edge/lane speed: https://sumo.dlr.de/docs/Simulation/VehicleSpeed.html#edgelane_speed_and_speedfactor
+                            if traci_constants["vehicle"]["allowed_speed"] in subscribed_data: ff_speed = subscribed_data[traci_constants["vehicle"]["allowed_speed"]]
+                            else: ff_speed = traci.vehicle.getAllowedSpeed(vehicle_id)
+                            ff_speed = convert_units(ff_speed, speed_units, "m/s")
+
                             #delay = max(self.step_length * ((ff_speed / curr_speed) - 1), 0)
-                            delay = self.step_length * ((ff_speed - curr_speed) / ff_speed)
-                        
+                            delay = max(self.step_length * ((ff_speed - curr_speed) / ff_speed), 0)
+                            
                         else: delay = self.step_length
                             
                         data_vals[data_key] = delay
+
+                    case "leader_id":
+                        if subscription_key in subscribed_data: leader_data = subscribed_data[subscription_key]
+                        else: leader_data = traci.vehicle.getLeader(vehicle_id)
+
+                        if leader_data == None: data_vals[data_key] = None
+                        else: data_vals[data_key] = leader_data[0]
+
+                    case "leader_dist":
+                        if subscription_key in subscribed_data: leader_data = subscribed_data[subscription_key]
+                        else: leader_data = traci.vehicle.getLeader(vehicle_id)
+
+                        if leader_data == None: leader_dist = None
+                        elif self.units.name != "IMPERIAL": leader_dist = leader_data[1]
+                        else: leader_dist = convert_units(leader_data[1], "metres", "feet")
+
+                        data_vals[data_key] = leader_dist
 
             if len(vehicle_ids) == 1:
                 if return_val: return list(data_vals.values())[0]
@@ -3339,49 +3371,52 @@ class Simulation:
             data_vals, subscribed_data = {}, g_class.getSubscriptionResults(geometry_id)
             for data_key in data_keys:
 
-                error, desc = test_valid_string(data_key, valid_get_geometry_val_keys, "data key")
+                error, desc = test_valid_string(data_key, valid_get_edge_val_keys + valid_get_lane_val_keys, "data key")
                 if error != None: raise_error(error, desc, self.curr_step)
+                elif g_name == "edge" and data_key not in valid_get_edge_val_keys:
+                    desc = f"Invalid data key '{data_key}' for edge '{geometry_id}' (only valid for lanes, not edges)."
+                    raise_error(ValueError, desc, self.curr_step)
+                elif g_name == "lane" and data_key not in valid_get_lane_val_keys:
+                    desc = f"Invalid data key '{data_key}' for lane '{geometry_id}' (only valid for edges, not lanes)."
+                    raise_error(ValueError, desc, self.curr_step)
+
+                subscription_key = traci_constants["geometry"][data_key] if data_key in traci_constants["geometry"] else None
 
                 match data_key:
                     case "vehicle_count":
-                        if tc.LAST_STEP_VEHICLE_ID_LIST in subscribed_data: vehicle_count = len(list(subscribed_data[tc.LAST_STEP_VEHICLE_ID_LIST]))
-                        elif tc.LAST_STEP_VEHICLE_NUMBER in subscribed_data: vehicle_count = subscribed_data[tc.LAST_STEP_VEHICLE_NUMBER]
+                        if "vehicle_ids" in data_vals: vehicle_count = len(data_vals["vehicle_ids"])
+                        elif traci_constants["geometry"]["vehicle_ids"] in subscribed_data: vehicle_count = len(list(subscribed_data[traci_constants["geometry"]["vehicle_ids"]]))
+                        elif subscription_key in subscribed_data: vehicle_count = subscribed_data[subscription_key]
                         else: vehicle_count = g_class.getLastStepVehicleNumber(geometry_id)
                         data_vals[data_key] = vehicle_count
-                        continue
 
                     case "vehicle_ids":
-                        if tc.LAST_STEP_VEHICLE_ID_LIST in subscribed_data: vehicle_ids = list(subscribed_data[tc.LAST_STEP_VEHICLE_ID_LIST])
+                        if subscription_key in subscribed_data: vehicle_ids = list(subscribed_data[subscription_key])
                         else: vehicle_ids = g_class.getLastStepVehicleIDs(geometry_id)
                         data_vals[data_key] = list(vehicle_ids)
-                        continue
 
                     case "vehicle_speed":
-                        if tc.LAST_STEP_MEAN_SPEED in subscribed_data: vehicle_speed = subscribed_data[tc.LAST_STEP_MEAN_SPEED]
+                        if subscription_key in subscribed_data: vehicle_speed = subscribed_data[subscription_key]
                         else: vehicle_speed = g_class.getLastStepMeanSpeed(geometry_id)
 
                         units = "kmph" if self.units.name == "METRIC" else "mph"
                         data_vals[data_key] = convert_units(vehicle_speed, "m/s", units)
-                        continue
 
                     case "avg_vehicle_length":
-                        if tc.LAST_STEP_LENGTH in subscribed_data: length = subscribed_data[tc.LAST_STEP_LENGTH]
+                        if subscription_key in subscribed_data: length = subscribed_data[subscription_key]
                         else: length = g_class.getLastStepLength(geometry_id)
                         units = convert_units(length, "metres", "feet") if self.units.name == "IMPERIAL" else length
                         data_vals[data_key] = length
-                        continue
                     
                     case "halting_no":
-                        if tc.LAST_STEP_VEHICLE_HALTING_NUMBER in subscribed_data: halting_no = subscribed_data[tc.LAST_STEP_VEHICLE_HALTING_NUMBER]
+                        if subscription_key in subscribed_data: halting_no = subscribed_data[subscription_key]
                         else: halting_no = g_class.getLastStepHaltingNumber(geometry_id)
                         data_vals[data_key] = halting_no
-                        continue 
 
                     case "vehicle_occupancy":
-                        if tc.LAST_STEP_OCCUPANCY in subscribed_data: vehicle_occupancy = subscribed_data[tc.LAST_STEP_OCCUPANCY]
+                        if subscription_key in subscribed_data: vehicle_occupancy = subscribed_data[subscription_key]
                         else: vehicle_occupancy = g_class.getLastStepOccupancy(geometry_id)
                         data_vals[data_key] = vehicle_occupancy
-                        continue
 
                     case "curr_travel_time":
                         speed_key = "max_speed" if self.get_geometry_vals(geometry_id, "vehicle_count") == 0 else "vehicle_speed"
@@ -3389,26 +3424,22 @@ class Simulation:
                         length, speed = vals["length"], vals[speed_key]
                         if self.units.name == "UK": speed = convert_units(speed, "mph", "kmph")
                         data_vals[data_key] = length / speed
-                        continue
 
                     case "ff_travel_time":
                         vals = self.get_geometry_vals(geometry_id, ("length", "max_speed"))
                         length, speed = vals["length"], vals["max_speed"]
                         if self.units.name == "UK": speed = convert_units(speed, "mph", "kmph")
                         data_vals[data_key] = length / speed
-                        continue
 
                     case "emissions":
                         data_vals[data_key] = ({"CO2": g_class.getCO2Emission(geometry_id), "CO": g_class.getCO2Emission(geometry_id), "HC": g_class.getHCEmission(geometry_id),
                                                 "PMx": g_class.getPMxEmission(geometry_id), "NOx": g_class.getNOxEmission(geometry_id)})
-                        continue
 
                     case "length":
                         if g_name == "edge": length = self._edge_info[geometry_id][data_key]
                         else: length = self._lane_info[geometry_id][data_key]
 
                         data_vals[data_key] = length
-                        continue
 
                     case "max_speed":
                         if geometry_id in self._edge_info: max_speed = self._edge_info[geometry_id][data_key]
@@ -3416,38 +3447,30 @@ class Simulation:
                         else: max_speed = g_class.getMaxSpeed(geometry_id)
 
                         data_vals[data_key] = max_speed
-                        continue
                     
-                if g_name == "edge":
-                    
-                    if data_key == "connected_edges":
+                    case "connected_edges":
                         data_vals[data_key] = {'incoming': self._edge_info[geometry_id]["incoming_edges"],
                                                'outgoing': self._edge_info[geometry_id]["outgoing_edges"]}
-                        
-                    elif data_key in self._edge_info[geometry_id].keys():
+                    case "edge_id":
+                        data_vals[data_key] = g_class.getEdgeID(geometry_id)
+
+                    case "n_links":
+                        data_vals[data_key] = g_class.getLinkNumber(geometry_id)
+
+                    case "allowed":
+                        data_vals[data_key] = g_class.getAllowed(geometry_id)
+
+                    case "disallowed":
+                        data_vals[data_key] = g_class.getDisallowed(geometry_id)
+
+                    case "left_lc":
+                        data_vals[data_key] = g_class.getChangePermissions(geometry_id, 0)
+
+                    case "right_lc":
+                        data_vals[data_key] = g_class.getChangePermissions(geometry_id, 1)
+
+                    case _:
                         data_vals[data_key] = self._edge_info[geometry_id][data_key]
-                    
-                    else:
-                        desc = "Invalid data key '{0}' (only valid for lanes, not edges).".format(data_key)
-                        raise_error(ValueError, desc, self.curr_step)
-                    
-                elif g_name == "lane":
-                    match data_key:
-                        case "edge_id":
-                            data_vals[data_key] = g_class.getEdgeID(geometry_id)
-                        case "n_links":
-                            data_vals[data_key] = g_class.getLinkNumber(geometry_id)
-                        case "allowed":
-                            data_vals[data_key] = g_class.getAllowed(geometry_id)
-                        case "disallowed":
-                            data_vals[data_key] = g_class.getDisallowed(geometry_id)
-                        case "left_lc":
-                            data_vals[data_key] = g_class.getChangePermissions(geometry_id, 0)
-                        case "right_lc":
-                            data_vals[data_key] = g_class.getChangePermissions(geometry_id, 1)
-                        case _:
-                            desc = "Invalid data key '{0}' (only valid for edges, not lanes).".format(data_key)
-                            raise_error(ValueError, desc, self.curr_step)
 
             if len(geometry_ids) == 1:
                 if return_val: return list(data_vals.values())[0]
