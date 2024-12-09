@@ -3025,10 +3025,18 @@ class Simulation:
 
     def get_vehicle_vals(self, vehicle_ids: str|list|tuple, data_keys: str|list) -> dict|str|int|float|list:
         """
-        Get data values for specific vehicle using a list of data keys. Valid data keys are; '_type_', '_length_',
+        Get data values for specific vehicle using a list of data keys. Valid data keys are;
+        
+        **Vehicle Characteristics**:
+        '_type_', '_colour_', '_length_', 
+
+        **Vehicle Status**:
         '_speed_', '_is_stopped_', '_max_speed_', '_allowed_speed_', '_acceleration_', '_position_', '_altitude_',
-        '_heading_', '_departure_', '_edge_id_', '_lane_id_', '_lane_idx_', '_origin_', '_destination_', '_route_id_',
-        '_route_idx_', '_route_edges_', '_delay_'.
+        '_heading_', '_edge_id_', '_lane_id_', '_lane_idx_', '_route_id_', '_route_idx_', '_route_edges_', '_delay_',
+        '_leader_id_', '_leader_dist_'
+
+        **Trip Data**:
+        '_departure_', '_origin_', '_destination_'
         
         Args:
             `vehicle_ids` (str, list, tuple): Vehicle ID or list of IDs
@@ -3333,7 +3341,8 @@ class Simulation:
         '_curr_travel_time_', '_ff_travel_time_', '_emissions_', '_length_', '_max_speed_'
         
         **Edge only**:
-        '_connected_edges_', '_incoming_edges_', '_outgoing_edges_', '_street_name_', '_n_lanes_', '_lane_ids_', '_linestring_'
+        '_connected_edges_', '_incoming_edges_', '_outgoing_edges_', '_street_name_', '_n_lanes_', '_lane_ids_', '_junction_ids_',
+        '_linestring_'
         
         **Lane only**: 
         '_edge_id_', '_n_links_', '_allowed_', '_disallowed_', '_left_lc_', '_right_lc_'.
