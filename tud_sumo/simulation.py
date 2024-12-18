@@ -226,11 +226,11 @@ class Simulation:
         # Get network file using sumolib to fetch information about
         # the network itself.
         network_file = traci.simulation.getOption("net-file")
-        network = sumolib.net.readNet(network_file)
+        self._network = sumolib.net.readNet(network_file, withInternal=True)
 
         self._lane_info = {}
         for l_id in self._all_lanes:
-            lane = network.getLane(l_id)
+            lane = self._network.getLane(l_id)
 
             len_units = "kilometres" if self.units.name == "METRIC" else "miles"
             length = convert_units(LineString(lane.getShape()).length, "metres", len_units)
@@ -242,7 +242,7 @@ class Simulation:
 
         self._edge_info = {}
         for e_id in self._all_edges:
-            edge = network.getEdge(e_id)
+            edge = self._network.getEdge(e_id)
             lane_ids = [f"{e_id}_{idx}" for idx in range(traci.edge.getLaneNumber(e_id))]
 
             self._edge_info[e_id] = {"incoming_edges": [incoming.getID() for incoming in edge.getIncoming()],
@@ -1099,7 +1099,7 @@ class Simulation:
 
         # Add all automatic subscriptions
         if self._automatic_subscriptions:
-            subscriptions = ["speed", "allowed_speed", "lane_idx"]
+            subscriptions = ["speed", "lane_id", "allowed_speed", "lane_idx"]
 
             # Subscribing to 'altitude' uses POSITION3D, which includes the vehicle x,y coordinates.
             # If not collecting all individual vehicle data, we can instead subcribe to the 2D position.
@@ -1164,12 +1164,12 @@ class Simulation:
 
                 data["detectors"][detector_id]["vehicle_ids"] = self.get_last_step_detector_vehicles(detector_id)
 
-            no_vehicles, no_waiting, delay, all_v_data = self.get_all_vehicle_data(vehicle_types=vehicle_types)
+            no_vehicles, no_waiting, delay, all_v_data = self._get_all_vehicle_data(vehicle_types=vehicle_types)
             data["vehicles"]["no_vehicles"] = no_vehicles
             data["vehicles"]["no_waiting"] = no_waiting
             data["vehicles"]["tts"] = no_vehicles * self.step_length
             data["vehicles"]["twt"] = no_waiting * self.step_length
-            data["vehicles"]["delay"] = delay # Delay should be updated to include vehicles waiting to be inserted
+            data["vehicles"]["delay"] = delay
 
             if self.track_juncs:
                 for junc_id, junc in self.tracked_junctions.items():
@@ -3032,7 +3032,7 @@ class Simulation:
 
         **Vehicle Status**:
         '_speed_', '_is_stopped_', '_max_speed_', '_allowed_speed_', '_acceleration_', '_position_', '_altitude_',
-        '_heading_', '_edge_id_', '_lane_id_', '_lane_idx_', '_route_id_', '_route_idx_', '_route_edges_', '_delay_',
+        '_heading_', '_edge_id_', '_lane_id_', '_lane_idx_', '_route_id_', '_route_idx_', '_route_edges_',
         '_leader_id_', '_leader_dist_'
 
         **Trip Data**:
@@ -3183,27 +3183,6 @@ class Simulation:
                         route = list(traci.vehicle.getRoute(vehicle_id))
                         data_vals[data_key] = route
 
-                    case "delay":
-                        speed_units = "kmph" if self.units.name == "METRIC" else "mph"
-                        if "speed" in data_vals: curr_speed = data_vals["speed"]
-                        elif traci_constants["vehicle"]["speed"] in subscribed_data: curr_speed = subscribed_data[traci_constants["vehicle"]["speed"]]
-                        else: curr_speed = traci.vehicle.getSpeed(vehicle_id)
-
-                        curr_speed = convert_units(data_vals["speed"], speed_units, "m/s")
-
-                        if curr_speed > 0:
-                            # Edge/lane speed: https://sumo.dlr.de/docs/Simulation/VehicleSpeed.html#edgelane_speed_and_speedfactor
-                            if traci_constants["vehicle"]["allowed_speed"] in subscribed_data: ff_speed = subscribed_data[traci_constants["vehicle"]["allowed_speed"]]
-                            else: ff_speed = traci.vehicle.getAllowedSpeed(vehicle_id)
-                            ff_speed = convert_units(ff_speed, speed_units, "m/s")
-
-                            #delay = max(self.step_length * ((ff_speed / curr_speed) - 1), 0)
-                            delay = max(self.step_length * ((ff_speed - curr_speed) / ff_speed), 0)
-                            
-                        else: delay = self.step_length
-                            
-                        data_vals[data_key] = delay
-
                     case "leader_id":
                         if subscription_key in subscribed_data: leader_data = subscribed_data[subscription_key]
                         else: leader_data = traci.vehicle.getLeader(vehicle_id)
@@ -3251,7 +3230,7 @@ class Simulation:
                 raise_error(KeyError, desc, self.curr_step)
             
             static_data_keys = ("type", "length", "departure", "origin")
-            dynamic_data_keys = ("speed", "acceleration", "delay", "is_stopped", "position", "altitude", "heading", "destination")
+            dynamic_data_keys = ("edge_id", "lane_id", "speed", "allowed_speed", "acceleration", "is_stopped", "position", "altitude", "heading", "destination")
             vehicle_data = self.get_vehicle_vals(vehicle_id, dynamic_data_keys)
 
             if vehicle_id not in self._known_vehicles.keys(): new_vehicle = True
@@ -3262,20 +3241,22 @@ class Simulation:
                 static_veh_data = self.get_vehicle_vals(vehicle_id, static_data_keys)
 
                 # Maintain _known_vehicles dictionary to not repeatedly need to fetch static data
-                self._known_vehicles[vehicle_id] = {"type":        static_veh_data["type"],
-                                                    "longitude":    vehicle_data["position"][0],
-                                                    "latitude":     vehicle_data["position"][1],
-                                                    "speed":        vehicle_data["speed"],
-                                                    "acceleration": vehicle_data["acceleration"],
-                                                    "delay":        vehicle_data["delay"],
-                                                    "is_stopped":   vehicle_data["is_stopped"],
-                                                    "length":       static_veh_data["length"],
-                                                    "heading":      vehicle_data["heading"],
-                                                    "departure":    static_veh_data["departure"],
-                                                    "altitude":     vehicle_data["altitude"],
-                                                    "destination":  vehicle_data["destination"],
-                                                    "origin":       static_veh_data["origin"],
-                                                    "last_seen":    self.curr_step
+                self._known_vehicles[vehicle_id] = {"type":          static_veh_data["type"],
+                                                    "edge_id":       vehicle_data["edge_id"],
+                                                    "lane_id":       vehicle_data["lane_id"],
+                                                    "longitude":     vehicle_data["position"][0],
+                                                    "latitude":      vehicle_data["position"][1],
+                                                    "speed":         vehicle_data["speed"],
+                                                    "allowed_speed": vehicle_data["allowed_speed"],
+                                                    "acceleration":  vehicle_data["acceleration"],
+                                                    "is_stopped":    vehicle_data["is_stopped"],
+                                                    "length":        static_veh_data["length"],
+                                                    "heading":       vehicle_data["heading"],
+                                                    "departure":     static_veh_data["departure"],
+                                                    "altitude":      vehicle_data["altitude"],
+                                                    "destination":   vehicle_data["destination"],
+                                                    "origin":        static_veh_data["origin"],
+                                                    "last_seen":     self.curr_step
                                                    }
             else:
 
@@ -3300,7 +3281,7 @@ class Simulation:
 
         return all_vehicle_data
 
-    def get_all_vehicle_data(self, vehicle_types: list|tuple|None = None) -> dict:
+    def _get_all_vehicle_data(self, vehicle_types: list|tuple|None = None) -> dict:
         """
         Collects aggregated vehicle data (no. vehicles & no. waiting vehicles) and all individual vehicle data.
         
@@ -3313,22 +3294,52 @@ class Simulation:
 
         all_vehicle_data = {}
         total_vehicle_data = {"no_vehicles": 0, "no_waiting": 0, "delay": 0}
+        lane_speeds, allowed_speeds = {}, {}
 
         for vehicle_id in self._all_curr_vehicle_ids:
 
-            if vehicle_id in self._known_vehicles.keys(): vehicle_type = self._known_vehicles[vehicle_id]["type"]
-            else: vehicle_type = traci.vehicle.getTypeID(vehicle_id)
+            vehicle_type = self.get_vehicle_vals(vehicle_id, "type")
 
             if vehicle_types is None or (isinstance(vehicle_types, (list, tuple)) and vehicle_type in vehicle_types) or (isinstance(vehicle_types, str) and vehicle_type == vehicle_types):
 
                 if self._get_individual_vehicle_data:
                     vehicle_data = self.get_vehicle_data(vehicle_id)
                     all_vehicle_data[vehicle_id] = vehicle_data
-                else: vehicle_data = self.get_vehicle_vals(vehicle_id, ["speed", "is_stopped", "delay"])
+                else: vehicle_data = self.get_vehicle_vals(vehicle_id, ["speed", "lane_id", "allowed_speed", "is_stopped"])
 
                 total_vehicle_data["no_vehicles"] += 1
                 if vehicle_data["is_stopped"]: total_vehicle_data["no_waiting"] += 1
-                total_vehicle_data["delay"] += vehicle_data["delay"]
+
+                lane_id, speed, allowed_speed = vehicle_data["lane_id"], vehicle_data["speed"], vehicle_data["allowed_speed"]
+
+                # Vehicle is on an internal edge (in an intersection)
+                if lane_id.startswith(':'): lane_id = self._network.getLane(lane_id).getIncoming()[0].getID()
+
+                if lane_id not in lane_speeds: lane_speeds[lane_id], allowed_speeds[lane_id] = [], []
+                if self.units == "UK": (speed, allowed_speed) = convert_units([speed, allowed_speed], "mph", "kmph")
+                lane_speeds[lane_id].append(speed)
+                allowed_speeds[lane_id].append(allowed_speed)
+
+        for lane_id, lane_data in lane_speeds.items():
+
+            lane_delay = 0
+            avg_speed = sum(lane_data) / len(lane_data)
+            ff_speed = sum(allowed_speeds[lane_id]) / len(allowed_speeds[lane_id])
+            # Free-flow speed is average 'allowed' speed of vehicles - factoring in lane speed limit and all vehicles' desired speed
+
+            if avg_speed <= 0:
+                # delay = TTS on lane if speed == 0
+                lane_delay = len(lane_data) * self.step_length
+
+            elif avg_speed < ff_speed:
+
+                length = self._lane_info[lane_id]["length"]
+
+                # flow = speed x density
+                flow = avg_speed * (len(lane_data) / length)
+                lane_delay = flow * ((length / avg_speed) - (length / ff_speed))
+            
+            total_vehicle_data["delay"] += lane_delay
 
         return total_vehicle_data["no_vehicles"], total_vehicle_data["no_waiting"], total_vehicle_data["delay"], all_vehicle_data
     
