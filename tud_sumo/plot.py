@@ -17,7 +17,7 @@ class _GenericPlotter():
     def __init__(self, units: str="METRIC", time_unit: str="seconds", save_fig_loc: str="", save_fig_dpi: int=600, overwrite_figs: bool=True):
 
         self._default_labels = {"no_vehicles": "No. of Vehicles", "no_waiting": "No. of Waiting Vehicles", "tts": "Total Time Spent (s)", "twt": "Total Waiting Time (s)", "avg_wt": "Waiting Time (s)",
-                                "delay": "Delay (s)", "avg_delay": "Delay (s)", "throughput": "Throughput (veh/hr)", "vehicle_counts": "No. of Vehicles", "flows": "Flow (vehicles/hour)",
+                                "delay": "Delay (veh s)", "avg_delay": "Delay (s)", "throughput": "Throughput (veh/hr)", "vehicle_counts": "No. of Vehicles", "flows": "Flow (vehicles/hour)",
                                 "occupancies": "Occupancy (%)", "densities": "Density unit", "metres": "Distance (m)", "kilometres": "Distance (km)", "yards": "Distance (yd)", "feet": "Distance (ft)",
                                 "miles": "Distance (mi)", "m/s": "Speed (m/s)", "kmph": "Speed (kmph)", "mph": "Speed (mph)", "steps": "Time (Simulation Steps)", "seconds": "Time (s)", "minutes": "Time (m)",
                                 "hours": "Time (hr)"}

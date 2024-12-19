@@ -73,6 +73,9 @@ class Simulation:
         self._v_func_params = {}
         self._valid_v_func_params = ["simulation", "curr_step", "vehicle_id", "route_id",
                                      "vehicle_type", "departure", "origin", "destination"] 
+        
+        self._default_view = 'View #0'
+        self._recordings = {}
 
     def __str__(self):
         if self.scenario_name != None:
@@ -213,6 +216,20 @@ class Simulation:
             self.units = Units(valid_units.index(units.upper())+1)
 
         elif units in [1, 2, 3]: self.units = Units(units)
+
+        match self.units.name:
+            case "METRIC":
+                self._speed_unit = "kmph"
+                self._l_dist_unit = "kilometres"
+                self._s_dist_unit = "metres"
+            case "IMPERIAL":
+                self._speed_unit = "mph"
+                self._l_dist_unit = "miles"
+                self._s_dist_unit = "feet"
+            case "UK":
+                self._speed_unit = "mph"
+                self._l_dist_unit = "kilometres"
+                self._s_dist_unit = "metres"
         
         self._all_juncs = list(traci.junction.getIDList())
         self._all_tls = list(traci.trafficlight.getIDList())
@@ -232,11 +249,8 @@ class Simulation:
         for l_id in self._all_lanes:
             lane = self._network.getLane(l_id)
 
-            len_units = "kilometres" if self.units.name == "METRIC" else "miles"
-            length = convert_units(LineString(lane.getShape()).length, "metres", len_units)
-
-            s_units = "kmph" if self.units.name == "METRIC" else "mph"
-            max_speed = convert_units(traci.lane.getMaxSpeed(l_id), "m/s", s_units)
+            length = convert_units(LineString(lane.getShape()).length, "metres", self._l_dist_unit)
+            max_speed = convert_units(traci.lane.getMaxSpeed(l_id), "m/s", self._speed_unit)
 
             self._lane_info[l_id] = {"length": length, "max_speed": max_speed}
 
@@ -254,9 +268,8 @@ class Simulation:
                                      "lane_ids": lane_ids
                                      }
             
-            len_unit = "miles" if self.units.name == "IMPERIAL" else "kilometres"
             e_length = LineString(self._edge_info[e_id]["linestring"]).length
-            self._edge_info[e_id]["length"] = convert_units(e_length, "metres", len_unit)
+            self._edge_info[e_id]["length"] = convert_units(e_length, "metres", self._l_dist_unit)
             self._edge_info[e_id]["max_speed"] = sum([self._lane_info[l_id]["max_speed"] for l_id in lane_ids]) / len(lane_ids)
 
         all_route_ids, self._all_routes = list(traci.route.getIDList()), {}
@@ -1084,6 +1097,17 @@ class Simulation:
         # First, implement the demand in the demand table (if exists)
         if self._manual_flow:
             self._add_demand_vehicles()
+
+        recording_ids = list(self._recordings.keys())
+        for recording_id in recording_ids:
+            recording_data = self._recordings[recording_id]
+            if "vehicle_id" in recording_data and recording_data["vehicle_id"] not in self._all_curr_vehicle_ids:
+                self.save_recording(recording_id, recording_data["video_filename"], recording_data["fps"])
+                continue
+
+            self.take_screenshot(recording_data["bounds"],
+                                 filename=f"{recording_data['frames_loc']}/f_{self.curr_step}.png",
+                                 view_id=recording_data["view_id"])
         
         # Step through simulation
         traci.simulationStep()
@@ -1614,9 +1638,7 @@ class Simulation:
                             if subscription_key in subscribed_data: speed = subscribed_data[subscription_key]
                             else: speed = d_class.getLastStepMeanSpeed(detector_id)
                             
-                            if speed > 0:
-                                units = "kmph" if self.units.name == "METRIC" else "mph"
-                                speed = convert_units(speed, "m/s", units)
+                            if speed > 0: speed = convert_units(speed, "m/s", self._speed_unit)
                             detector_data[data_key] = speed
                         else: detector_data[data_key] = -1
 
@@ -1644,7 +1666,7 @@ class Simulation:
                                     detector_data[data_key] = last_detection
                                 elif data_key == "avg_vehicle_length":
                                     vehicle_len = d_class.getLastStepMeanLength(detector_id)
-                                    if self.units.name == "IMPERIAL": vehicle_len = convert_units(vehicle_len, "metres", "feet")
+                                    vehicle_len = convert_units(vehicle_len, "metres", self._s_dist_unit)
                                     detector_data[data_key] = vehicle_len
             
             if len(detector_ids) == 1:
@@ -2128,8 +2150,7 @@ class Simulation:
             raise_error(TypeError, desc, self.curr_step)
 
         if isinstance(initial_speed, (int, float)):
-            units = "kmph" if self.units.name == "METRIC" else "mph"
-            initial_speed = convert_units(initial_speed, units, "m/s")
+            initial_speed = convert_units(initial_speed, self._speed_unit, "m/s")
 
         if not self.vehicle_type_exists(vehicle_type) and vehicle_type != "default":
             desc = "Vehicle type ID '{0}' not found.".format(vehicle_type)
@@ -2641,16 +2662,14 @@ class Simulation:
 
                     case "speed":
                         if isinstance(value, (int, float)): 
-                            units = "kmph" if self.units.name == "METRIC" else "mph"
-                            traci.vehicle.setSpeed(vehicle_id, convert_units(value, units, "m/s"))
+                            traci.vehicle.setSpeed(vehicle_id, convert_units(value, self._speed_unit, "m/s"))
                         else:
                             desc = "({0}): Invalid speed value '{1}' (must be [int|float], not '{2}').".format(command, value, type(value).__name__)
                             raise_error(TypeError, desc, self.curr_step)
                     
                     case "max_speed":
                         if isinstance(value, (int, float)):
-                            units = "kmph" if self.units.name == "METRIC" else "mph"
-                            traci.vehicle.setMaxSpeed(vehicle_id, convert_units(value, units, "m/s"))
+                            traci.vehicle.setMaxSpeed(vehicle_id, convert_units(value, self._speed_unit, "m/s"))
                         else:
                             desc = "({0}): Invalid max_speed value '{1}' (must be [int|float], not '{2}').".format(command, value, type(value).__name__)
                             raise_error(TypeError, desc, self.curr_step)
@@ -3086,8 +3105,7 @@ class Simulation:
                         new_request = not (vehicle_known and data_key in self._known_vehicles[vehicle_id].keys())
                         if new_request:
                             length = traci.vehicle.getLength(vehicle_id)
-                            units = "feet" if self.units.name == "IMPERIAL" else "metres"
-                            length = convert_units(length, "metres", units)
+                            length = convert_units(length, "metres", self._s_dist_unit)
                             self._known_vehicles[vehicle_id][data_key] = length
                         data_vals[data_key] = self._known_vehicles[vehicle_id][data_key]
 
@@ -3095,8 +3113,7 @@ class Simulation:
                         if subscription_key in subscribed_data: speed = subscribed_data[subscription_key]
                         else: speed = traci.vehicle.getSpeed(vehicle_id)
                         
-                        units = "kmph" if self.units.name == "METRIC" else "mph"
-                        data_vals[data_key] = convert_units(speed, "m/s", units)
+                        data_vals[data_key] = convert_units(speed, "m/s", self._speed_unit)
 
                     case "is_stopped":
                         if "speed" in data_vals: speed = data_vals["speed"]
@@ -3108,15 +3125,13 @@ class Simulation:
                         if subscription_key in subscribed_data: max_speed = subscribed_data[subscription_key]
                         else: max_speed = traci.vehicle.getMaxSpeed(vehicle_id)
                         
-                        units = "kmph" if self.units.name == "METRIC" else "mph"
-                        data_vals[data_key] = convert_units(max_speed, "m/s", units)
+                        data_vals[data_key] = convert_units(max_speed, "m/s", self._speed_unit)
 
                     case "allowed_speed":
                         if subscription_key in subscribed_data: allowed_speed = subscribed_data[subscription_key]
                         else: allowed_speed = traci.vehicle.getAllowedSpeed(vehicle_id)
                         
-                        units = "kmph" if self.units.name == "METRIC" else "mph"
-                        data_vals[data_key] = convert_units(allowed_speed, "m/s", units)
+                        data_vals[data_key] = convert_units(allowed_speed, "m/s", self._speed_unit)
 
                     case "acceleration":
                         if subscription_key in subscribed_data: acceleration = subscribed_data[subscription_key]
@@ -3195,8 +3210,7 @@ class Simulation:
                         else: leader_data = traci.vehicle.getLeader(vehicle_id)
 
                         if leader_data == None: leader_dist = None
-                        elif self.units.name != "IMPERIAL": leader_dist = leader_data[1]
-                        else: leader_dist = convert_units(leader_data[1], "metres", "feet")
+                        else: leader_dist = convert_units(leader_data[1], "metres", self._s_dist_unit)
 
                         data_vals[data_key] = leader_dist
 
@@ -3312,33 +3326,34 @@ class Simulation:
 
                 lane_id, speed, allowed_speed = vehicle_data["lane_id"], vehicle_data["speed"], vehicle_data["allowed_speed"]
 
-                # Vehicle is on an internal edge (in an intersection)
+                # Vehicle is on an internal edge (in an intersection) - set to its previous lane
                 if lane_id.startswith(':'): lane_id = self._network.getLane(lane_id).getIncoming()[0].getID()
 
+                # Convert allowed/measured speeds to m/s
                 if lane_id not in lane_speeds: lane_speeds[lane_id], allowed_speeds[lane_id] = [], []
-                if self.units == "UK": (speed, allowed_speed) = convert_units([speed, allowed_speed], "mph", "kmph")
+                (speed, allowed_speed) = convert_units([speed, allowed_speed], self._speed_unit, "m/s")
                 lane_speeds[lane_id].append(speed)
                 allowed_speeds[lane_id].append(allowed_speed)
 
         for lane_id, lane_data in lane_speeds.items():
 
-            lane_delay = 0
-            avg_speed = sum(lane_data) / len(lane_data)
-            ff_speed = sum(allowed_speeds[lane_id]) / len(allowed_speeds[lane_id])
+            lane_delay = 0 # veh*s
+            avg_speed = sum(lane_data) / len(lane_data) # m/s
+            ff_speed = sum(allowed_speeds[lane_id]) / len(allowed_speeds[lane_id]) # m/s
             # Free-flow speed is average 'allowed' speed of vehicles - factoring in lane speed limit and all vehicles' desired speed
 
-            if avg_speed <= 0:
+            if avg_speed == 0:
                 # delay = TTS on lane if speed == 0
                 lane_delay = len(lane_data) * self.step_length
 
             elif avg_speed < ff_speed:
 
-                length = self._lane_info[lane_id]["length"]
+                length = convert_units(self._lane_info[lane_id]["length"], self._l_dist_unit, "metres")
 
-                # flow = speed x density
-                flow = avg_speed * (len(lane_data) / length)
+                # step inflow (veh) = speed (m/s) x density (veh/m) x step length (s)
+                flow = (avg_speed * (len(lane_data) / length)) * self.step_length
                 lane_delay = flow * ((length / avg_speed) - (length / ff_speed))
-            
+
             total_vehicle_data["delay"] += lane_delay
 
         return total_vehicle_data["no_vehicles"], total_vehicle_data["no_waiting"], total_vehicle_data["delay"], all_vehicle_data
@@ -3419,14 +3434,13 @@ class Simulation:
                         if subscription_key in subscribed_data: vehicle_speed = subscribed_data[subscription_key]
                         else: vehicle_speed = g_class.getLastStepMeanSpeed(geometry_id)
 
-                        units = "kmph" if self.units.name == "METRIC" else "mph"
-                        data_vals[data_key] = convert_units(vehicle_speed, "m/s", units)
+                        data_vals[data_key] = convert_units(vehicle_speed, "m/s", self._speed_unit)
 
                     case "avg_vehicle_length":
                         if subscription_key in subscribed_data: length = subscribed_data[subscription_key]
                         else: length = g_class.getLastStepLength(geometry_id)
-                        units = convert_units(length, "metres", "feet") if self.units.name == "IMPERIAL" else length
-                        data_vals[data_key] = length
+                        
+                        data_vals[data_key] = convert_units(length, "metres", self._s_dist_unit)
                     
                     case "halting_no":
                         if subscription_key in subscribed_data: halting_no = subscribed_data[subscription_key]
@@ -3800,6 +3814,85 @@ class Simulation:
             else:
                 desc = "Controller with ID '{0}' not found.".format(controller_id)
                 raise_error(KeyError, desc, self.curr_step)
+
+    def gui_track_vehicle(self, vehicle_id, view_id=None):
+
+        if not self._gui:
+            desc = f"Cannot track vehicle '{vehicle_id}' (GUI is not active)."
+            raise_error(SimulationError, desc, self.curr_step)
+
+        if view_id == None: view_id = self._default_view
+        
+        traci.gui.trackVehicle(view_id, vehicle_id)
+
+    def gui_record_vehicle(self, vehicle_id, recording_name, video_filename=None, fps=None, zoom=None, frames_loc=None, view_id=None):
+
+        if not self._gui:
+            desc = f"Cannot record vehicle '{vehicle_id}' (GUI is not active)."
+            raise_error(SimulationError, desc, self.curr_step)
+        
+        if recording_name in self._recordings:
+            desc = f"Invalid recording_name '{recording_name}' (already in use)."
+            raise_error(ValueError, desc, self.curr_step)
+
+        if view_id == None: view_id = self._default_view
+        if view_id in [recording["view_id"] for recording in self._recordings]:
+            desc = f"Invalid view ID '{view_id}' (already in use)."
+            raise_error(ValueError, desc, self.curr_step)
+        elif not traci.gui.hasView(view_id):
+            traci.gui.addView(view_id)
+
+        if video_filename == None: video_filename = recording_name + ".mp4"
+        if fps == None: fps = 1 / self.step_length
+
+        if frames_loc == None: frames_loc = recording_name+"_frames"
+        if frames_loc in [recording["frames_loc"] for recording in self._recordings]:
+            desc = f"Invalid frames_loc '{frames_loc}' (already in use)."
+            raise_error(ValueError, desc, self.curr_step)
+        elif not os.path.exists(frames_loc):
+            os.makedirs(frames_loc)
+
+        default_bounds = traci.gui.getBoundary(view_id)
+        default_zoom = traci.gui.getZoom(view_id)
+
+        self._recordings[recording_name] = {"vehicle_id": vehicle_id,
+                                            "bounds": None,
+                                            "default_bounds": default_bounds,
+                                            "default_zoom": default_zoom,
+                                            "frames_loc": frames_loc,
+                                            "view_id": view_id,
+                                            "video_filename": video_filename,
+                                            "fps": fps}
+
+        traci.gui.trackVehicle(view_id, vehicle_id)
+        if zoom != None: traci.gui.setZoom(view_id, zoom)
+
+    def set_view_bounds(self, view_id, bounds, zoom=None):
+        traci.gui.setBoundary(view_id, bounds[0][0], bounds[0][1], bounds[1][0], bounds[1][1])
+        if zoom != None: traci.gui.setZoom(view_id, zoom)
+
+    def take_screenshot(self, bounds=None, filename=None, view_id=None):
+
+        if not self._gui:
+            desc = f"Cannot take screenshot (GUI is not active)."
+            raise_error(SimulationError, desc, self.curr_step)
+
+        if bounds != None: self.set_view_bounds(bounds)
+
+        traci.gui.screenshot(view_id, filename)
+
+    def save_recording(self, recording_name, video_filename=None, fps=None, delete_frames=True, delete_view=True):
+        if video_filename == None: video_filename = recording_name + ".mp4"
+
+        recording_data = self._recordings[recording_name]
+        if delete_view and recording_data["view_id"] != self._default_view:
+            traci.gui.removeView(recording_data["view_id"])
+        else:
+            self.set_view_bounds(recording_data["view_id"], recording_data["default_bounds"], recording_data["default_zoom"])
+        
+
+
+        del self._recordings[recording_name]
 
     def print_summary(self, save_file=None) -> None:
         """
