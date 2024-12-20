@@ -1,4 +1,4 @@
-import os, sys, io, traci, sumolib, json, csv, math, inspect
+import os, sys, io, traci, sumolib, json, csv, math, inspect, importlib.util
 import pickle as pkl
 import numpy as np
 from tqdm import tqdm
@@ -991,7 +991,7 @@ class Simulation:
                 if self.track_juncs: all_data["data"]["junctions"] = {}
                 if len(self.tracked_edges) > 0: all_data["data"]["edges"] = {}
                 if len(self.controllers) > 0: all_data["data"]["controllers"] = {}
-                all_data["data"]["vehicles"] = {"no_vehicles": [], "no_waiting": [], "tts": [], "twt": [], "delay": []}
+                all_data["data"]["vehicles"] = {"no_vehicles": [], "no_waiting": [], "tts": [], "twt": [], "delay": [], "to_depart": []}
                 if self._manual_flow and self._demand_arrs != None:
                     all_data["data"]["demand"] = {"headers": self._demand_headers, "table": self._demand_arrs}
                 all_data["data"]["trips"] = {"incomplete": {}, "completed": {}}
@@ -1102,11 +1102,11 @@ class Simulation:
         for recording_id in recording_ids:
             recording_data = self._recordings[recording_id]
             if "vehicle_id" in recording_data and recording_data["vehicle_id"] not in self._all_curr_vehicle_ids:
-                self.save_recording(recording_id, recording_data["video_filename"], recording_data["fps"])
+                self.save_recording(recording_id)
                 continue
 
             self.take_screenshot(recording_data["bounds"],
-                                 filename=f"{recording_data['frames_loc']}/f_{self.curr_step}.png",
+                                 filename=f"{recording_data['frames_loc']}/f_{self.curr_step-recording_data['start_step']}.png",
                                  view_id=recording_data["view_id"])
         
         # Step through simulation
@@ -1188,12 +1188,13 @@ class Simulation:
 
                 data["detectors"][detector_id]["vehicle_ids"] = self.get_last_step_detector_vehicles(detector_id)
 
-            no_vehicles, no_waiting, delay, all_v_data = self._get_all_vehicle_data(vehicle_types=vehicle_types)
-            data["vehicles"]["no_vehicles"] = no_vehicles
-            data["vehicles"]["no_waiting"] = no_waiting
-            data["vehicles"]["tts"] = no_vehicles * self.step_length
-            data["vehicles"]["twt"] = no_waiting * self.step_length
-            data["vehicles"]["delay"] = delay
+            total_data, all_v_data = self._get_all_vehicle_data(vehicle_types=vehicle_types)
+            data["vehicles"]["no_vehicles"] = total_data["no_vehicles"]
+            data["vehicles"]["no_waiting"] = total_data["no_waiting"]
+            data["vehicles"]["tts"] = total_data["no_vehicles"] * self.step_length
+            data["vehicles"]["twt"] = total_data["no_waiting"] * self.step_length
+            data["vehicles"]["delay"] = total_data["delay"]
+            data["vehicles"]["to_depart"] = total_data["to_depart"]
 
             if self.track_juncs:
                 for junc_id, junc in self.tracked_junctions.items():
@@ -3337,26 +3338,29 @@ class Simulation:
 
         for lane_id, lane_data in lane_speeds.items():
 
-            lane_delay = 0 # veh*s
-            avg_speed = sum(lane_data) / len(lane_data) # m/s
-            ff_speed = sum(allowed_speeds[lane_id]) / len(allowed_speeds[lane_id]) # m/s
-            # Free-flow speed is average 'allowed' speed of vehicles - factoring in lane speed limit and all vehicles' desired speed
+            lane_delay = 0 # veh*s         # len(lane_data) = No. vehicles on the lane
+            average_speed = sum(lane_data) / len(lane_data) # m/s
+            free_flow_speed = sum(allowed_speeds[lane_id]) / len(allowed_speeds[lane_id]) # m/s
 
-            if avg_speed == 0:
+            if average_speed == 0:
                 # delay = TTS on lane if speed == 0
                 lane_delay = len(lane_data) * self.step_length
 
-            elif avg_speed < ff_speed:
+            elif average_speed < free_flow_speed:
 
-                length = convert_units(self._lane_info[lane_id]["length"], self._l_dist_unit, "metres")
+                lane_length = convert_units(self._lane_info[lane_id]["length"], self._l_dist_unit, "metres")
 
-                # step inflow (veh) = speed (m/s) x density (veh/m) x step length (s)
-                flow = (avg_speed * (len(lane_data) / length)) * self.step_length
-                lane_delay = flow * ((length / avg_speed) - (length / ff_speed))
+                # step flow (veh) = speed (m/s) x density (veh/m) x step length (s)
+                flow = (average_speed * (len(lane_data) / lane_length)) * self.step_length
+                lane_delay = flow * ((lane_length / average_speed) - (lane_length / free_flow_speed))
 
             total_vehicle_data["delay"] += lane_delay
 
-        return total_vehicle_data["no_vehicles"], total_vehicle_data["no_waiting"], total_vehicle_data["delay"], all_vehicle_data
+        total_vehicle_data["to_depart"] = len(self._all_to_depart_vehicle_ids)
+        #total_vehicle_data["no_vehicles"] += total_vehicle_data["to_depart"]
+        #total_vehicle_data["delay"] += total_vehicle_data["to_depart"] * self.step_length
+
+        return total_vehicle_data, all_vehicle_data
     
     def get_geometry_vals(self, geometry_ids: str|list|tuple, data_keys: str|list) -> dict|str|int|float|list:
         """
@@ -3825,8 +3829,13 @@ class Simulation:
         
         traci.gui.trackVehicle(view_id, vehicle_id)
 
-    def gui_record_vehicle(self, vehicle_id, recording_name, video_filename=None, fps=None, zoom=None, frames_loc=None, view_id=None):
-
+    def gui_record_vehicle(self, vehicle_id, recording_name, zoom=None, frames_loc=None, view_id=None):
+        
+        spec = importlib.util.find_spec('cv2')
+        if spec is None:
+            desc = "OpenCV is required to create recordings. Install OpenCV and try again."
+            raise_error(ImportError, desc, self.curr_step)
+        
         if not self._gui:
             desc = f"Cannot record vehicle '{vehicle_id}' (GUI is not active)."
             raise_error(SimulationError, desc, self.curr_step)
@@ -3842,9 +3851,6 @@ class Simulation:
         elif not traci.gui.hasView(view_id):
             traci.gui.addView(view_id)
 
-        if video_filename == None: video_filename = recording_name + ".mp4"
-        if fps == None: fps = 1 / self.step_length
-
         if frames_loc == None: frames_loc = recording_name+"_frames"
         if frames_loc in [recording["frames_loc"] for recording in self._recordings]:
             desc = f"Invalid frames_loc '{frames_loc}' (already in use)."
@@ -3856,13 +3862,12 @@ class Simulation:
         default_zoom = traci.gui.getZoom(view_id)
 
         self._recordings[recording_name] = {"vehicle_id": vehicle_id,
+                                            "start_step": self.curr_step,
                                             "bounds": None,
                                             "default_bounds": default_bounds,
                                             "default_zoom": default_zoom,
                                             "frames_loc": frames_loc,
-                                            "view_id": view_id,
-                                            "video_filename": video_filename,
-                                            "fps": fps}
+                                            "view_id": view_id}
 
         traci.gui.trackVehicle(view_id, vehicle_id)
         if zoom != None: traci.gui.setZoom(view_id, zoom)
@@ -3882,7 +3887,15 @@ class Simulation:
         traci.gui.screenshot(view_id, filename)
 
     def save_recording(self, recording_name, video_filename=None, fps=None, delete_frames=True, delete_view=True):
+
+        if recording_name not in self._recordings:
+            desc = f"Recording '{recording_name} not found."
+            raise_error(KeyError, desc, self.curr_step)
+
+        if 'VideoWriter' not in dir(): from cv2 import VideoWriter, VideoWriter_fourcc, imread
+
         if video_filename == None: video_filename = recording_name + ".mp4"
+        if fps == None: fps = 1 / self.step_length
 
         recording_data = self._recordings[recording_name]
         if delete_view and recording_data["view_id"] != self._default_view:
@@ -3890,7 +3903,20 @@ class Simulation:
         else:
             self.set_view_bounds(recording_data["view_id"], recording_data["default_bounds"], recording_data["default_zoom"])
         
+        frames, frame_no, done = [], 1, False
+        while not done:
+            frame_file = f"{recording_data['frames_loc']}/f_{frame_no}.png"
+            if os.path.exists(frame_file):
+                frame = imread(frame_file)
+                frames.append(frame)
+                dimensions = frame.shape
+                frame_no += 1
+            else: done = True
 
+        vidwriter = VideoWriter(video_filename, VideoWriter_fourcc('m', 'p', '4', 'v'), 1.0, dimensions[:2])
+        for frame in frames:
+            vidwriter.write(frame)
+        vidwriter.release()
 
         del self._recordings[recording_name]
 
@@ -4466,7 +4492,8 @@ def print_summary(sim_data: dict|str, save_file: str|None=None, tab_width: int=5
 
     labels = {"no_vehicles": ["No. Vehicles", "Overall TTS"],
               "no_waiting": ["No. Waiting Vehicles", "Overall TWT"],
-              "delay": ["Vehicle Delay", "Cumulative Delay"]}
+              "delay": ["Vehicle Delay", "Cumulative Delay"],
+              "to_depart": ["Vehicles to Depart", None]}
 
     for key, label in labels.items():
         data = sim_data["data"]["vehicles"][key]
@@ -4475,7 +4502,7 @@ def print_summary(sim_data: dict|str, save_file: str|None=None, tab_width: int=5
         _table_print(["Average:", f"{round(sum(data)/len(data), 2)}{unit}"], tab_width)
         _table_print(["Peak:", f"{round(max(data), 2)}{unit}"], tab_width)
         _table_print(["Final:", f"{round(data[-1], 2)}{unit}"], tab_width)
-        _table_print([f"{label[1]}:", f"{round(sum(data), 2)}s"], tab_width)
+        if label[1] != None: _table_print([f"{label[1]}:", f"{round(sum(data), 2)}s"], tab_width)
         print(tertiary_delineator)
 
     _table_print(["Individual Data:", "Yes" if "all_vehicles" in sim_data["data"].keys() else "No"], tab_width)

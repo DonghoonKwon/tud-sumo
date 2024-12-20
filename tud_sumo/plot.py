@@ -20,12 +20,12 @@ class _GenericPlotter():
                                 "delay": "Delay (veh s)", "avg_delay": "Delay (s)", "throughput": "Throughput (veh/hr)", "vehicle_counts": "No. of Vehicles", "flows": "Flow (vehicles/hour)",
                                 "occupancies": "Occupancy (%)", "densities": "Density unit", "metres": "Distance (m)", "kilometres": "Distance (km)", "yards": "Distance (yd)", "feet": "Distance (ft)",
                                 "miles": "Distance (mi)", "m/s": "Speed (m/s)", "kmph": "Speed (kmph)", "mph": "Speed (mph)", "steps": "Time (Simulation Steps)", "seconds": "Time (s)", "minutes": "Time (m)",
-                                "hours": "Time (hr)"}
+                                "hours": "Time (hr)", "to_depart": "No. of Vehicles"}
 
         self._default_titles = {"no_vehicles": "Number of Vehicles", "no_waiting": "Number of Waiting Vehicles", "tts": "Total Time Spent",
                                 "twt": "Total Waiting Time", "avg_wt": "Average Vehicle Waiting Time", "delay": "Vehicle Delay", "avg_delay": "Average Vehicle Delay",
                                 "vehicle_counts": "Number of Vehicles", "occupancies": "Vehicle Occupancies", "densities": "Vehicle Density",
-                                "speeds": "Average Vehicle Speed", "flows": "Vehicle Flow", "limits": "Speed Limit", "throughput": "Throughput"}
+                                "speeds": "Average Vehicle Speed", "flows": "Vehicle Flow", "limits": "Speed Limit", "throughput": "Throughput", "to_depart": "Vehicles to Depart"}
 
         # TU Delft colours as defined here: https://www.tudelft.nl/huisstijl/bouwstenen/kleur
         self._tud_colours = {"cyaan": "#00A6D6", "donkerblauw": "#0C2340", "turkoois": "#00B8C8", "blauw": "#0076C2", "paars": "#6F1D77", "roze": "#EF60A3",
@@ -898,7 +898,7 @@ class Plotter(_GenericPlotter):
         Plot network-wide vehicle data.
         
         Args:
-            `data_key` (str): Data key to plot, either '_no_vehicles_', '_no_waiting_', '_tts_', '_twt_', '_avg_wt_', '_delay_' or '_avg_delay_'
+            `data_key` (str): Data key to plot, either '_no_vehicles_', '_no_waiting_', '_tts_', '_twt_', '_avg_wt_', '_delay_', '_avg_delay_' or '_to_depart_'
             `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
             `aggregation_steps` (int, None): If given, values are aggregated using this interval
             `time_range` (list, tuple, None): Plotting time range (in plotter class units)
@@ -912,8 +912,8 @@ class Plotter(_GenericPlotter):
             self.sim_data = self.simulation.__dict__()
             self.units = self.simulation.units.name
 
-        if data_key not in ["no_vehicles", "no_waiting", "tts", "twt", "avg_wt", "delay", "avg_delay"]:
-            desc = "Unrecognised data key '{0}' (must be ['no_vehicles'|'no_waiting'|'tts'|'twt'|'avg_wt'|'delay'|'avg_delay']).".format(data_key)
+        if data_key not in ["no_vehicles", "no_waiting", "tts", "twt", "avg_wt", "delay", "avg_delay", "to_depart"]:
+            desc = "Unrecognised data key '{0}' (must be ['no_vehicles'|'no_waiting'|'tts'|'twt'|'avg_wt'|'delay'|'avg_delay'|'to_depart']).".format(data_key)
             raise_error(KeyError, desc)
 
         fig, ax = plt.subplots(1, 1)
@@ -2270,7 +2270,7 @@ class MultiPlotter(_GenericPlotter):
         Plot network-wide vehicle data for each simulation.
         
         Args:
-            `data_key` (str): Data key to plot, either '_no_vehicles_', '_no_waiting_', '_tts_', '_twt_', '_avg_wt_', '_delay_' or '_avg_delay_'
+            `data_key` (str): Data key to plot, either '_no_vehicles_', '_no_waiting_', '_tts_', '_twt_', '_avg_wt_', '_delay_', '_avg_delay_' or '_to_depart_'
             `plot_cumulative` (bool): Bool denoting whether to plot cumulative values
             `plot_groups` (list, tuple, None): List of dataset groups to plot (defaults to all)
             `plot_range` (bool): Denotes whether to plot minimum-maximum value range for groups as a shaded region
@@ -2281,8 +2281,8 @@ class MultiPlotter(_GenericPlotter):
             `save_fig` (str, None): Output image filename, will show image if not given
         """
 
-        if data_key not in ["no_vehicles", "no_waiting", "tts", "twt", "avg_wt", "delay", "avg_delay"]:
-            desc = "Unrecognised data key '{0}' (must be ['no_vehicles'|'no_waiting'|'tts'|'twt'|'avg_wt'|'delay'|'avg_delay']).".format(data_key)
+        if data_key not in ["no_vehicles", "no_waiting", "tts", "twt", "avg_wt", "delay", "avg_delay", "to_depart"]:
+            desc = "Unrecognised data key '{0}' (must be ['no_vehicles'|'no_waiting'|'tts'|'twt'|'avg_wt'|'delay'|'avg_delay'|'to_depart']).".format(data_key)
             raise_error(KeyError, desc)
 
         fig, ax = plt.subplots(1, 1)
