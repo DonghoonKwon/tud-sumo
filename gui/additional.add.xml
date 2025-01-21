@@ -1,0 +1,4 @@
+<additional>
+    <edgeData id="SFO" file="results.xml" excludeEmpty="true" begin="0" end="3600"/>
+    <!-- <edgeData id="gneE98" file="temp" begin="1000" end="1600"/> -->
+</additional>

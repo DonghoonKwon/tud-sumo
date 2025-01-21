@@ -1,0 +1,3 @@
+<routes>
+    <vType id="pc" vClass="passenger" length="5" maxSpeed="55.55" accel="2.6" decel="4.5" sigma="0.3" laneChangeModel="LC2013" lcStrategic="0" lcCooperative="1" lcSpeedGain="10" lcKeepRight="0" lcOvertakeRight="0.9999" lcAssertive="1"/>
+</routes>
